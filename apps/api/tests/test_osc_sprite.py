@@ -7,6 +7,20 @@ def test_keys_are_per_version():
     assert k == {"jpg": "osc/sprites/abc.jpg", "json": "osc/sprites/abc.json", "vtt": "osc/sprites/abc.vtt"}
 
 
+def test_sharp_tiers_cover_dpr3_and_stay_under_ios_decode_limits():
+    widths = sorted(w for w, _, _ in s.TIERS)
+    assert widths[-1] >= 350 * 3          # a ~350-CSS-px phone card at DPR 3
+    assert any(w >= 160 * 3 for w in widths)  # the 160-CSS seek tooltip at DPR 3
+    for w, cols, rows in s.TIERS:
+        h = round(w * 9 / 16)
+        assert (w * cols) * (h * rows) <= 10.6e6, (w, cols, rows)
+
+
+def test_tier_keys_are_per_version_and_numbered():
+    assert s.tier_keys("v1", 1080, 3) == [
+        "osc/sprites/v1/t1080_001.jpg", "osc/sprites/v1/t1080_002.jpg", "osc/sprites/v1/t1080_003.jpg"]
+
+
 def test_build_refuses_no_duration(tmp_path):
     assert s.build("u", 0, 1920, 1080, str(tmp_path)) is None
 
