@@ -61,6 +61,10 @@ interface CommentInputProps {
   onToggleAnnotation?: () => void;
   /** OSC: share-link views. Everything posted there is client-visible, so no Internal option. */
   publicOnly?: boolean;
+  /** OSC (Sam 10/3 00:17): staff comments start as Internal. Undefined = public. */
+  defaultVisibility?: "public" | "internal";
+  /** OSC: hide the Internal option (non-staff; the server refuses it for them). */
+  allowInternal?: boolean;
   className?: string;
 }
 
@@ -204,6 +208,8 @@ export function CommentInput({
   annotationActive,
   onToggleAnnotation,
   publicOnly = false,
+  defaultVisibility,
+  allowInternal = true,
   className,
 }: CommentInputProps) {
   const {
@@ -241,7 +247,15 @@ export function CommentInput({
   const [error, setError] = React.useState<string | null>(null);
   const [commentVisibility, setCommentVisibility] = React.useState<
     "public" | "internal"
-  >("public");
+  >(defaultVisibility ?? "public");
+  // The staff/role check can resolve after mount: follow the default until the user picks.
+  const visTouchedRef = React.useRef(false);
+  React.useEffect(() => {
+    if (!visTouchedRef.current && defaultVisibility) setCommentVisibility(defaultVisibility);
+  }, [defaultVisibility]);
+  React.useEffect(() => {
+    if (!allowInternal) setCommentVisibility("public");
+  }, [allowInternal]);
   const [visDropdownOpen, setVisDropdownOpen] = React.useState(false);
   const [timecodeAttached, setTimecodeAttached] = React.useState(true);
   const visRef = React.useRef<HTMLDivElement>(null);
@@ -411,7 +425,7 @@ export function CommentInput({
         undefined,
         finalAnnotation,
         replyToId ?? undefined,
-        publicOnly ? "public" : commentVisibility,
+        publicOnly || !allowInternal ? "public" : commentVisibility,
         mentionUserIds.length > 0 ? mentionUserIds : undefined,
       );
 
@@ -637,7 +651,7 @@ export function CommentInput({
 
             <div className="flex items-center gap-2">
               {/* Visibility: OSC says plainly who will see this before it posts */}
-              {publicOnly ? (
+              {publicOnly || !allowInternal ? (
                 <span
                   data-osc-visibility="public-only"
                   title="Everything posted on a share link is visible to the client"
@@ -677,6 +691,7 @@ export function CommentInput({
                           : "text-text-secondary hover:bg-bg-tertiary",
                       )}
                       onClick={() => {
+                        visTouchedRef.current = true;
                         setCommentVisibility("public");
                         setVisDropdownOpen(false);
                       }}
@@ -692,6 +707,7 @@ export function CommentInput({
                           : "text-text-secondary hover:bg-bg-tertiary",
                       )}
                       onClick={() => {
+                        visTouchedRef.current = true;
                         setCommentVisibility("internal");
                         setVisDropdownOpen(false);
                       }}
