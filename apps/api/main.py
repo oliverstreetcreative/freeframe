@@ -104,6 +104,8 @@ app.include_router(instance_settings.router)
 app.include_router(instance_branding.router)
 from .routers import osc_poster  # OSC: set/shuffle a version's poster (grid thumbnail)
 app.include_router(osc_poster.router)
+from .routers import osc_storyboard  # OSC: hover-scrub storyboards
+app.include_router(osc_storyboard.router)
 
 @app.get("/health")
 def health():

@@ -444,8 +444,9 @@ export function VideoPlayer({
         )}
       </div>
 
-      {/* Progress bar */}
-      <div className="shrink-0 bg-bg-primary">
+      {/* Progress bar. OSC: its own stacking layer above the <video>, which otherwise painted over the
+          hover frame-preview tooltip (the tooltip sits above the bar, over the picture). */}
+      <div className="shrink-0 bg-bg-primary relative z-30">
         <ProgressBar
           currentTime={currentTime}
           duration={duration}
@@ -453,6 +454,7 @@ export function VideoPlayer({
           comments={comments}
           streamUrl={streamUrl}
           onSeek={seek}
+          storyboardAssetId={assetId}
         />
       </div>
 

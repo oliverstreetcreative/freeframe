@@ -2117,6 +2117,19 @@ class FFmpegTranscoder(BaseTranscoder):
                 )
                 uploaded_thumb = True
 
+            # OSC: hover-scrub storyboard (sprite + JSON + WebVTT), keyed by version id. Best-effort:
+            # a failure here never fails the transcode; the grid just doesn't scrub that card.
+            try:
+                from . import osc_sprite
+                osc_sprite.build_and_upload(
+                    self.s3, self.bucket, str(job.version_id), input_url,
+                    (meta.duration_seconds or 0) if meta else 0,
+                    (meta.width or 0) if meta else 0, (meta.height or 0) if meta else 0,
+                    str(work_dir),
+                )
+            except Exception:
+                pass
+
             return TranscodeResult(
                 success=True,
                 hls_prefix=job.output_s3_prefix,
