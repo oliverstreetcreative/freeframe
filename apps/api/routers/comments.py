@@ -790,7 +790,7 @@ def export_comments(
     format: str = Query(...),
     version_id: Optional[uuid.UUID] = Query(default=None),
     fps: Optional[float] = Query(default=None, gt=0),
-    start_tc: str = Query(default="01:00:00:00"),
+    start_tc: Optional[str] = Query(default=None),
     include_resolved: bool = Query(default=True),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
@@ -849,6 +849,11 @@ def export_comments(
                        + ", ".join(str(round(s.fps, 3)) for s in comment_export.FPS_TABLE),
             )
         if format == "edl":
+            # OSC: no ?start_tc= (the web UI never sends one) -> the source's own embedded start
+            # timecode (OSC renders start 00:59:55:00), else upstream's 01:00:00:00.
+            if start_tc is None:
+                from ..services.osc_timecode import probe_start_tc
+                start_tc = probe_start_tc(media_file.s3_key_raw if media_file else None) or "01:00:00:00"
             if not _START_TC_RE.match(start_tc):
                 raise HTTPException(status_code=422, detail="start_tc must be HH:MM:SS:FF")
             hh, mm, ss, ff = (int(p) for p in re.split(r"[:;]", start_tc))
