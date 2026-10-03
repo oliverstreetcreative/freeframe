@@ -467,8 +467,14 @@ function ReviewScreenInner({ projectId }: { projectId: string }) {
     />
   )
 
+  // OSC (Sam 10/3 00:17 "internal by default"): staff = superadmin or project owner/editor.
+  const myRole = members?.find((m) => m.user_id === user?.id)?.role
+  // Until the member list arrives, assume staff (Internal): a slow load must never post public.
+  const isStaff = !!user?.is_superadmin || members === undefined || myRole === 'owner' || myRole === 'editor'
   const commentInputNode = canComment ? (
     <CommentInput
+      defaultVisibility={isStaff ? 'internal' : 'public'}
+      allowInternal={isStaff}
       assetId={asset.id}
       projectId={asset.project_id}
       assetType={asset.asset_type}
