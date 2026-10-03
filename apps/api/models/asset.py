@@ -22,6 +22,8 @@ class AssetStatus(str, PyEnum):
     approved = "approved"
     rejected = "rejected"
     archived = "archived"
+    # OSC status labels: "Client review". DB enum value added by osc_status_ddl.py at API start.
+    client_review = "client_review"
 
 class ProcessingStatus(str, PyEnum):
     uploading = "uploading"

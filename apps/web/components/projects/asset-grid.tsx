@@ -8,6 +8,7 @@ import { Avatar } from '@/components/shared/avatar'
 import { EmptyState } from '@/components/shared/empty-state'
 import { ContextMenuArea, DotsMenu } from '@/components/shared/item-menu'
 import { AssetCard } from './asset-card'
+import { StatusPill, StatusFilterBar, effectiveStatus, passesStatusFilter, useOscStatusVersion } from '@/components/osc/status'
 import { FolderCard } from './folder-card'
 import { AssetMenuItems } from './menus/asset-menu'
 import { WithFolderMenu } from './menus/folder-menu'
@@ -249,9 +250,12 @@ export function AssetGrid({
   }
   const selectedTotalSize = Array.from(selectedAssetIds).reduce((sum, id) => sum + (fileSizes[id] ?? 0), 0)
 
+  // OSC 0001: the status filter bar narrows the grid; a just-made status change sorts where it now belongs.
+  const oscStatusVersion = useOscStatusVersion()
   const filtered = React.useMemo(
-    () => sortAssets(assets, sortKey, sortDirection),
-    [assets, sortKey, sortDirection],
+    () => sortAssets(assets.filter(passesStatusFilter), sortKey, sortDirection, effectiveStatus),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [assets, sortKey, sortDirection, oscStatusVersion],
   )
 
   const showFolders = !flattenFolders && folders && folders.length > 0
@@ -416,6 +420,9 @@ export function AssetGrid({
           )}
         </div>
       )}
+
+      {/* OSC status labels: filter chips (from the unfiltered list, so they never vanish) */}
+      <StatusFilterBar assets={assets} />
 
       {/* ─── Grid view: folders section ──────────────────────────────── */}
       {showFolders && layout === 'grid' && (
@@ -710,6 +717,7 @@ export function AssetGrid({
                 <div className="flex-1 min-w-0">
                   <p className="text-sm font-medium text-text-primary truncate leading-snug">{asset.name}</p>
                 </div>
+                <div className="shrink-0"><StatusPill asset={asset} size="xs" /></div>
                 {/* Uploader */}
                 {showUploader && (
                   <div className="hidden md:block w-32 text-xs text-text-tertiary truncate shrink-0">

@@ -32,6 +32,12 @@ const statusConfig: Record<AssetStatus, { label: string; dot: string; bg: string
     bg: 'bg-status-error/10',
     text: 'text-status-error',
   },
+  client_review: {
+    label: 'Client review',
+    dot: 'bg-text-tertiary',
+    bg: 'bg-bg-tertiary',
+    text: 'text-text-secondary',
+  },
   archived: {
     label: 'Archived',
     dot: 'bg-text-tertiary',

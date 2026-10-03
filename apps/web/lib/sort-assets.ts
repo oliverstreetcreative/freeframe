@@ -1,14 +1,10 @@
 import type { AssetStatus } from '@/types'
 import type { SortDirection, SortKey } from '@/stores/view-store'
 import { compareNames } from './utils'
+import { OSC_STATUS_ORDER } from '@/components/osc/status'
 
-const statusOrder: Record<AssetStatus, number> = {
-  in_review: 0,
-  draft: 1,
-  approved: 2,
-  rejected: 3,
-  archived: 4,
-}
+// OSC 0001: OSC status labels sort what needs attention first; components/osc/status.tsx owns the order.
+const statusOrder: Record<AssetStatus, number> = OSC_STATUS_ORDER
 
 interface SortableAsset {
   name: string
@@ -26,6 +22,8 @@ export function sortAssets<T extends SortableAsset>(
   assets: readonly T[],
   sortKey: SortKey,
   sortDirection: SortDirection,
+  // OSC 0001: callers pass effectiveStatus so a status changed on this page sorts by its new value.
+  statusOf: (asset: T) => AssetStatus = (asset) => asset.status,
 ): T[] {
   const result = [...assets]
   if (sortKey === 'custom') return result
@@ -37,7 +35,7 @@ export function sortAssets<T extends SortableAsset>(
     } else if (sortKey === 'name') {
       cmp = compareNames(a.name, b.name)
     } else if (sortKey === 'status') {
-      cmp = statusOrder[a.status] - statusOrder[b.status]
+      cmp = statusOrder[statusOf(a)] - statusOrder[statusOf(b)]
     } else if (sortKey === 'type') {
       cmp = a.asset_type.localeCompare(b.asset_type)
     }

@@ -2,7 +2,7 @@
 
 export type AssetType = "image" | "image_carousel" | "audio" | "video";
 
-export type AssetStatus = "draft" | "in_review" | "approved" | "rejected" | "archived";
+export type AssetStatus = "draft" | "in_review" | "approved" | "rejected" | "archived" | "client_review";
 
 export type AssetVersionStatus = "uploading" | "processing" | "ready" | "failed";
 
