@@ -35,6 +35,18 @@ from ..services.permissions import validate_asset_in_share, validate_share_link_
 
 router = APIRouter(tags=["osc_share_decision"])
 
+# Fable review 10/3 04:30 #1 [SAM]: the portal may own the ONE approval of record. Until Sam rules,
+# one env var picks the behaviour without a code change:
+#   binding (default, 0010 as built): Approve / Request changes; approval turns the pill green
+#   ok:  non-binding 'Looks good' / 'Needs changes'; recorded + shown, the pill is NOT moved
+#   off: no buttons; the route answers 403
+import os as _os
+
+
+def mode() -> str:
+    m = _os.environ.get("OSC_SHARE_DECISION_MODE", "binding").strip().lower()
+    return m if m in ("binding", "ok", "off") else "binding"
+
 
 class DecisionIn(BaseModel):
     decision: str
@@ -66,6 +78,8 @@ def _resolve(db: Session, link, asset_id, version_id):
 def share_decision(token: str, body: DecisionIn, share_session: Optional[str] = Query(None),
                    db: Session = Depends(get_db), current_user: Optional[User] = Depends(get_optional_user)):
     link = validate_share_link_with_session(db, token, share_session=share_session, current_user=current_user)
+    if mode() == "off":
+        raise HTTPException(403, "Approvals from links are turned off")
     if link.permission != SharePermission.approve:
         raise HTTPException(403, "This link doesn't allow approvals")
     decision = (body.decision or "").strip().lower()
@@ -93,7 +107,10 @@ def share_decision(token: str, body: DecisionIn, share_session: Optional[str] = 
         {"id": str(uuid.uuid4()), "l": str(link.id), "a": str(asset.id), "v": str(version.id),
          "e": email, "n": name, "s": decision, "note": (body.note or "").strip() or None})
 
-    label = "✅ Approved" if decision == "approved" else "🔁 Changes requested"
+    if mode() == "ok":
+        label = "👍 Looks good (not a sign-off)" if decision == "approved" else "✏️ Needs changes"
+    else:
+        label = "✅ Approved" if decision == "approved" else "🔁 Changes requested"
     note = (body.note or "").strip()
     db.add(Comment(asset_id=asset.id, version_id=version.id, author_id=author_id, guest_author_id=guest_id,
                    body=f"{label}: {note}" if note else label, visibility="public"))
@@ -101,7 +118,8 @@ def share_decision(token: str, body: DecisionIn, share_session: Optional[str] = 
                              action=ShareActivityAction.approved if decision == "approved" else ShareActivityAction.rejected,
                              actor_email=email, actor_name=name, asset_id=asset.id, asset_name=asset.name))
     db.commit()
-    sync_status(db, asset, version.id)
+    if mode() == "binding":
+        sync_status(db, asset, version.id)
     event_service.publish_sync(asset.project_id, "approval_updated",
                                {"asset_id": str(asset.id), "status": decision, "via": "share_link"})
     return {"decision": decision, "version_id": str(version.id), "asset_status": asset.status.value
@@ -116,4 +134,5 @@ def share_decisions(token: str, asset_id: Optional[uuid.UUID] = None, version_id
     asset, version = _resolve(db, link, asset_id, version_id)
     rows = db.execute(text("SELECT name, status, created_at FROM osc_guest_approvals WHERE version_id = :v "
                            "ORDER BY created_at"), {"v": str(version.id)}).fetchall()
-    return [{"name": r[0], "decision": r[1], "at": r[2].isoformat() if r[2] else None} for r in rows]
+    return {"mode": mode(),
+            "decisions": [{"name": r[0], "decision": r[1], "at": r[2].isoformat() if r[2] else None} for r in rows]}
