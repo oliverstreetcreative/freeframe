@@ -41,6 +41,7 @@ from ..services.permissions import (
 )
 from ..tasks.email_tasks import send_mention_email, send_comment_email
 from ..tasks.celery_app import send_task_safe
+from ..services.osc_visibility import is_staff, resolve_visibility
 
 log = logging.getLogger(__name__)
 
@@ -303,6 +304,9 @@ def _create_mentions(db: Session, comment: Comment, asset: Asset, body: str, aut
     # (or a guest via a share link) could @mention an arbitrary user id/email and have their
     # name, the asset name, and a comment preview emailed to someone with no access to either.
     mentioned_users = [u for u in mentioned_users if can_access_asset(db, asset, u)]
+    # OSC: an internal note's preview is never emailed to a non-staff (client) account.
+    if comment.visibility == "internal":
+        mentioned_users = [u for u in mentioned_users if is_staff(db, asset.project_id, u)]
 
     for user in mentioned_users:
         mention = Mention(comment_id=comment.id, mentioned_user_id=user.id)
@@ -347,8 +351,14 @@ def list_comments(
         query = query.filter(Comment.version_id == version_id)
     if visibility and visibility in ("public", "internal"):
         query = query.filter(Comment.visibility == visibility)
+    # OSC: internal notes are staff-only. Client accounts (reviewer/viewer) never receive them,
+    # nor any reply under them (exclude_internal drops the whole subtree).
+    staff = is_staff(db, asset.project_id, current_user)
+    if not staff:
+        query = query.filter(Comment.visibility != "internal")
     top_level = query.order_by(Comment.created_at).all()
-    return _build_comment_responses_batched(asset_id, top_level, db, current_user_id=current_user.id)
+    return _build_comment_responses_batched(asset_id, top_level, db, current_user_id=current_user.id,
+                                            exclude_internal=not staff)
 
 
 @router.post("/assets/{asset_id}/comments", response_model=CommentResponse, status_code=status.HTTP_201_CREATED)
@@ -374,6 +384,7 @@ def create_comment(
     # inside a thread on an asset the author cannot open. The weaker failure is
     # the same bug pointed at a deleted parent: a 201 for a reply no read path
     # will ever return.
+    parent = None
     if body.parent_id is not None:
         parent = db.query(Comment).filter(
             Comment.id == body.parent_id,
@@ -391,7 +402,8 @@ def create_comment(
         timecode_start=body.timecode_start,
         timecode_end=body.timecode_end,
         body=body.body,
-        visibility=body.visibility or "public",
+        # OSC: enforced server-side (staff only; replies to internal stay internal; never downgraded)
+        visibility=resolve_visibility(db, asset.project_id, current_user, body.visibility, parent),
     )
     db.add(comment)
     db.flush()
@@ -462,7 +474,8 @@ def reply_to_comment(
         body=body.body,
         timecode_start=body.timecode_start,
         timecode_end=body.timecode_end,
-        visibility=body.visibility or "public",
+        # OSC: enforced server-side; a reply to an internal note is internal
+        visibility=resolve_visibility(db, asset.project_id, current_user, body.visibility, parent),
     )
     db.add(reply)
     db.flush()
@@ -739,7 +752,7 @@ def comment_deep_link(
         Comment.asset_id == asset_id,
         Comment.deleted_at.is_(None),
     ).first()
-    if not comment:
+    if not comment or (comment.visibility == "internal" and not is_staff(db, asset.project_id, current_user)):
         raise HTTPException(status_code=404, detail="Comment not found")
 
     url = f"{settings.frontend_url}/assets/{asset_id}?comment={comment_id}"
@@ -846,6 +859,15 @@ def export_comments(
         Comment.version_id == version.id,
         Comment.deleted_at.is_(None),
     ).order_by(Comment.created_at.asc()).all()
+    # OSC: a client account exporting markers never gets internal notes (or replies under them).
+    if not is_staff(db, asset.project_id, current_user):
+        hidden = {c.id for c in comments if c.visibility == "internal"}
+        changed = True
+        while changed:
+            more = {c.id for c in comments if c.parent_id in hidden and c.id not in hidden}
+            hidden |= more
+            changed = bool(more)
+        comments = [c for c in comments if c.id not in hidden]
 
     user_ids = {c.author_id for c in comments if c.author_id}
     guest_ids = {c.guest_author_id for c in comments if c.guest_author_id}
@@ -1025,6 +1047,18 @@ def guest_comment(
             db.flush()
         guest_author_id = guest.id
 
+    # OSC: a reply's parent must be a live comment on THIS asset. (Upstream wrote parent_id straight
+    # through on this route.) A reply under an internal note is internal, so non-staff get 403.
+    parent = None
+    if body.parent_id is not None:
+        parent = db.query(Comment).filter(
+            Comment.id == body.parent_id,
+            Comment.asset_id == asset.id,
+            Comment.deleted_at.is_(None),
+        ).first()
+        if not parent:
+            raise HTTPException(status_code=400, detail="parent_id does not belong to this asset")
+
     comment = Comment(
         asset_id=asset.id,
         version_id=version_id,
@@ -1034,6 +1068,8 @@ def guest_comment(
         timecode_start=body.timecode_start,
         timecode_end=body.timecode_end,
         body=body.body,
+        # OSC: honour "internal" for signed-in staff only; guests/clients get 403, never a silent public
+        visibility=resolve_visibility(db, asset.project_id, current_user, body.visibility, parent),
     )
     db.add(comment)
     db.flush()

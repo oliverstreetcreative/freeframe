@@ -59,6 +59,8 @@ interface CommentInputProps {
   annotationActive?: boolean;
   /** Compare mode: called instead of the global toggle when the pencil / exit is clicked. */
   onToggleAnnotation?: () => void;
+  /** OSC: share-link views. Everything posted there is client-visible, so no Internal option. */
+  publicOnly?: boolean;
   className?: string;
 }
 
@@ -201,6 +203,7 @@ export function CommentInput({
   disableAnnotations,
   annotationActive,
   onToggleAnnotation,
+  publicOnly = false,
   className,
 }: CommentInputProps) {
   const {
@@ -408,7 +411,7 @@ export function CommentInput({
         undefined,
         finalAnnotation,
         replyToId ?? undefined,
-        commentVisibility,
+        publicOnly ? "public" : commentVisibility,
         mentionUserIds.length > 0 ? mentionUserIds : undefined,
       );
 
@@ -633,7 +636,17 @@ export function CommentInput({
             </div>
 
             <div className="flex items-center gap-2">
-              {/* Visibility dropdown */}
+              {/* Visibility: OSC says plainly who will see this before it posts */}
+              {publicOnly ? (
+                <span
+                  data-osc-visibility="public-only"
+                  title="Everything posted on a share link is visible to the client"
+                  className="inline-flex items-center gap-1.5 h-7 px-2.5 rounded-md text-[12px] border border-border text-text-secondary"
+                >
+                  <Globe className="h-3 w-3" />
+                  Visible to client
+                </span>
+              ) : (
               <div className="relative" ref={visRef}>
                 <button
                   onClick={() => setVisDropdownOpen((p) => !p)}
@@ -649,7 +662,9 @@ export function CommentInput({
                   ) : (
                     <Globe className="h-3 w-3" />
                   )}
-                  {commentVisibility === "internal" ? "Internal" : "Public"}
+                  <span data-osc-visibility={commentVisibility}>
+                    {commentVisibility === "internal" ? "Internal · OSC only" : "Visible to client"}
+                  </span>
                   <ChevronDown className="h-3 w-3" />
                 </button>
                 {visDropdownOpen && (
@@ -667,7 +682,7 @@ export function CommentInput({
                       }}
                     >
                       <Globe className="h-3.5 w-3.5" />
-                      Public
+                      Visible to client
                     </button>
                     <button
                       className={cn(
@@ -682,11 +697,12 @@ export function CommentInput({
                       }}
                     >
                       <Lock className="h-3.5 w-3.5" />
-                      Internal
+                      Internal · OSC only
                     </button>
                   </div>
                 )}
               </div>
+              )}
 
               {/* Submit */}
               <button
