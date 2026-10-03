@@ -20,7 +20,8 @@ export function ShareDecision({ token, shareSession, assetId, versionId, permiss
   token: string; shareSession?: string | null; assetId: string; versionId?: string; permission: string
 }) {
   const [decisions, setDecisions] = React.useState<Decision[]>([])
-  const [mode, setMode] = React.useState<null | 'approved' | 'rejected'>(null)
+  const [mode, setDecisionMode] = React.useState<'binding' | 'ok' | 'off' | null>(null)
+  const [panel, setPanel] = React.useState<null | 'approved' | 'rejected'>(null)
   const [note, setNote] = React.useState('')
   const [name, setName] = React.useState('')
   const [email, setEmail] = React.useState('')
@@ -31,11 +32,12 @@ export function ShareDecision({ token, shareSession, assetId, versionId, permiss
   const load = React.useCallback(async () => {
     try {
       const r = await fetch(`${API_URL}/share/${token}/decisions?${qs}`)
-      if (r.ok) setDecisions(await r.json())
+      if (r.ok) { const d = await r.json(); setDecisions(d.decisions ?? []); setDecisionMode(d.mode ?? 'binding') }
     } catch {}
   }, [token, qs])
   React.useEffect(() => { if (permission === 'approve') load() }, [permission, load])
-  if (permission !== 'approve') return null
+  if (permission !== 'approve' || mode === null || mode === 'off') return null
+  const ok = mode === 'ok'
 
   const signedIn = typeof window !== 'undefined' && !!localStorage.getItem('ff_access_token')
   const known = signedIn || !!guestIdentity()
@@ -57,7 +59,7 @@ export function ShareDecision({ token, shareSession, assetId, versionId, permiss
                             { method: 'POST', headers, body: JSON.stringify(body) })
       if (!r.ok) throw new Error((await r.json().catch(() => ({}))).detail || 'Could not send')
       setMsg(decision === 'approved' ? 'Approved. Thank you!' : 'Sent. Thank you!')
-      setMode(null); setNote(''); load()
+      setPanel(null); setNote(''); load()
     } catch (e) {
       setMsg(e instanceof Error ? e.message : 'Could not send')
     } finally { setBusy(false) }
@@ -68,22 +70,22 @@ export function ShareDecision({ token, shareSession, assetId, versionId, permiss
     <div className="relative flex items-center gap-1.5" data-osc-share-decision>
       {mine && (
         <span className="hidden sm:inline text-[11px] text-text-tertiary mr-1">
-          {mine.decision === 'approved' ? 'Approved' : 'Changes requested'} by {mine.name}
+          {mine.decision === 'approved' ? (ok ? 'Looks good to' : 'Approved by') : (ok ? 'Needs changes from' : 'Changes requested by')} {mine.name}
         </span>
       )}
-      <button type="button" disabled={busy} onClick={() => setMode(mode === 'approved' ? null : 'approved')}
+      <button type="button" disabled={busy} onClick={() => setPanel(panel === 'approved' ? null : 'approved')}
         className="inline-flex items-center gap-1 h-7 px-2.5 rounded-md text-xs font-semibold text-white disabled:opacity-60"
         style={{ background: '#15803D' }}>
-        <Check className="h-3.5 w-3.5" /> Approve
+        <Check className="h-3.5 w-3.5" /> {ok ? 'Looks good' : 'Approve'}
       </button>
-      <button type="button" disabled={busy} onClick={() => setMode(mode === 'rejected' ? null : 'rejected')}
+      <button type="button" disabled={busy} onClick={() => setPanel(panel === 'rejected' ? null : 'rejected')}
         className="inline-flex items-center gap-1 h-7 px-2.5 rounded-md text-xs font-medium border border-border text-text-secondary hover:text-text-primary hover:bg-bg-hover">
-        <RotateCcw className="h-3.5 w-3.5" /> <span className="hidden sm:inline">Request changes</span><span className="sm:hidden">Changes</span>
+        <RotateCcw className="h-3.5 w-3.5" /> <span className="hidden sm:inline">{ok ? 'Needs changes' : 'Request changes'}</span><span className="sm:hidden">Changes</span>
       </button>
-      {mode && (
+      {panel && (
         <div className="absolute right-0 top-9 z-50 w-72 rounded-xl border border-border bg-bg-elevated shadow-2xl p-3 space-y-2">
           <p className="text-sm text-text-primary font-medium">
-            {mode === 'approved' ? 'Approve this version?' : 'What should change?'}
+            {panel === 'approved' ? (ok ? 'Looks good? (not a final sign-off)' : 'Approve this version?') : 'What should change?'}
           </p>
           {!known && (
             <div className="flex gap-2">
@@ -93,17 +95,17 @@ export function ShareDecision({ token, shareSession, assetId, versionId, permiss
                 className="flex-1 min-w-0 h-8 rounded-md border border-border bg-bg-hover px-2 text-xs text-text-primary" />
             </div>
           )}
-          <textarea value={note} onChange={(e) => setNote(e.target.value)} rows={mode === 'rejected' ? 3 : 2}
-            placeholder={mode === 'approved' ? 'Optional note' : 'A short note helps (or leave timecoded comments)'}
+          <textarea value={note} onChange={(e) => setNote(e.target.value)} rows={panel === 'rejected' ? 3 : 2}
+            placeholder={panel === 'approved' ? 'Optional note' : 'A short note helps (or leave timecoded comments)'}
             className="w-full rounded-md border border-border bg-bg-hover px-2 py-1.5 text-xs text-text-primary" />
           <div className="flex justify-end gap-2">
-            <button type="button" onClick={() => setMode(null)} className="h-7 px-2.5 text-xs text-text-tertiary">Cancel</button>
+            <button type="button" onClick={() => setPanel(null)} className="h-7 px-2.5 text-xs text-text-tertiary">Cancel</button>
             <button type="button" disabled={busy || (!known && (!name.trim() || !email.trim()))}
-              onClick={() => send(mode)}
+              onClick={() => send(panel)}
               className="inline-flex items-center gap-1 h-7 px-3 rounded-md text-xs font-semibold text-white disabled:opacity-50"
-              style={{ background: mode === 'approved' ? '#15803D' : '#DC2626' }}>
+              style={{ background: panel === 'approved' ? '#15803D' : '#DC2626' }}>
               {busy && <Loader2 className="h-3 w-3 animate-spin" />}
-              {mode === 'approved' ? 'Approve' : 'Send'}
+              {panel === 'approved' ? (ok ? 'Looks good' : 'Approve') : 'Send'}
             </button>
           </div>
         </div>
