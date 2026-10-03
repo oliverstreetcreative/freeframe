@@ -100,28 +100,38 @@ export function StatusPill({
 }: { asset: Pick<Asset, 'id' | 'status'>; editable?: boolean; size?: 'xs' | 'sm'; className?: string }) {
   const current = useEffectiveStatus(asset)
   const meta = statusMeta(current)
-  const pill = (
-    <span
-      data-osc-status={current}
-      className={cn(
-        'inline-flex items-center gap-1 rounded-full font-semibold leading-none whitespace-nowrap select-none',
-        size === 'xs' ? 'px-2 py-[3px] text-[10px]' : 'px-2.5 py-1 text-xs',
-        editable && 'cursor-pointer',
-        className,
-      )}
-      style={{ background: meta.bg, color: meta.fg }}
-    >
+  // ONE element is the pill: the ring must hug it (Sam 10/2 23:55 "the orange outline doesn't
+  // align"). Before, a wrapper <button> carried the ring around an inner <span>, so the ring had the
+  // button's box (plus inline baseline space), not the pill's. Now the button IS the pill, the ring
+  // is a box-shadow on that same rounded element (gap in the page colour, then the accent), and it
+  // shows on keyboard focus only (:focus-visible), never as a leftover after a click.
+  const pillClass = cn(
+    'inline-flex items-center gap-1 rounded-full font-semibold leading-none whitespace-nowrap select-none align-middle',
+    size === 'xs' ? 'px-2 py-[3px] text-[10px]' : 'px-2.5 py-1 text-xs',
+    className,
+  )
+  const inner = (
+    <>
       {meta.label}
       {editable && <ChevronDown className={size === 'xs' ? 'h-2.5 w-2.5' : 'h-3 w-3'} style={{ color: meta.fg }} />}
-    </span>
+    </>
   )
-  if (!editable) return pill
+  if (!editable) {
+    return (
+      <span data-osc-status={current} className={pillClass} style={{ background: meta.bg, color: meta.fg }}>
+        {inner}
+      </span>
+    )
+  }
   return (
     <DropdownMenu.Root>
       <DropdownMenu.Trigger asChild>
-        <button type="button" aria-label={`Status: ${meta.label}. Change status`}
-          onClick={(e) => e.stopPropagation()} className="outline-none rounded-full focus-visible:ring-2 focus-visible:ring-accent">
-          {pill}
+        <button type="button" data-osc-status={current} aria-label={`Status: ${meta.label}. Change status`}
+          onClick={(e) => e.stopPropagation()}
+          className={cn(pillClass, 'cursor-pointer border-0 outline-none focus:outline-none',
+            'focus-visible:[box-shadow:0_0_0_2px_var(--bg-primary),0_0_0_4px_var(--accent)]')}
+          style={{ background: meta.bg, color: meta.fg }}>
+          {inner}
         </button>
       </DropdownMenu.Trigger>
       <DropdownMenu.Portal>
@@ -157,7 +167,7 @@ export function StatusFilterBar({ assets }: { assets: Pick<Asset, 'id' | 'status
         const n = counts.get(s.value) ?? 0
         return (
           <button key={s.value} type="button" onClick={() => toggle(s.value)} aria-pressed={on}
-            className={cn('inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-xs transition-colors',
+            className={cn('inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-xs transition-colors outline-none focus-visible:[box-shadow:0_0_0_2px_var(--bg-primary),0_0_0_4px_var(--accent)]',
               on ? 'border-transparent' : 'border-border text-text-secondary hover:text-text-primary hover:bg-bg-hover',
               n === 0 && !on && 'opacity-50')}
             style={on ? { background: s.bg, color: s.fg } : undefined}>

@@ -123,6 +123,8 @@ vi.mock('@/components/review/mobile-comment-sheet', () => ({
 vi.mock('@/components/review/version-switcher', () => ({ VersionSwitcher: () => null }))
 vi.mock('@/components/review/share-dialog', () => ({ ShareDialog: () => null }))
 vi.mock('@/components/review/compare/compare-overlay', () => ({ CompareOverlay: () => null }))
+// OSC 0003: the poster picker (needs a ToastProvider) is not part of the layout under test.
+vi.mock('@/components/osc/poster', () => ({ PosterMenu: () => null }))
 
 import ReviewPage from '../page'
 
