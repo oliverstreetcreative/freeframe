@@ -69,17 +69,86 @@ export function indexAtTime(sb: Storyboard, t: number): number {
 }
 
 /**
- * Grid card overlay: sits over the thumbnail. Mouse: move across to scrub. Touch: drag across.
- * Hover intent (90 ms) before loading, so sweeping the pointer over a grid doesn't fetch every card.
+ * Grid card overlay: sits over the thumbnail.
+ *  - Mouse: hover intent (90 ms) loads the sheet, then moving across scrubs.
+ *  - Touch (Sam 10/3 00:20, iPhone: "a flash of a frame change, but that's it"): pointer events
+ *    got cancelled the moment Safari claimed the gesture for scrolling, and the sheet only started
+ *    loading on that first touch. Now: the sheet PRELOADS when the card scrolls into view on a
+ *    touch device; touch is handled with native touchstart/touchmove (passive: false) and a
+ *    direction lock: a horizontal drag scrubs (preventDefault, so the page doesn't scroll) and
+ *    the frames follow the finger continuously; a vertical drag is left alone, so the page scrolls.
+ *    A tap (no drag) still opens the asset.
  */
+const isCoarse = () => typeof window !== 'undefined' && !!window.matchMedia?.('(pointer: coarse)').matches
+
 export function ScrubOverlay({ assetId }: { assetId: string }) {
   const { sb, want } = useStoryboard(assetId)
   const [frac, setFrac] = React.useState<number | null>(null)
   const timer = React.useRef<ReturnType<typeof setTimeout> | null>(null)
+  const ref = React.useRef<HTMLDivElement>(null)
 
-  const onEnter = () => { timer.current = setTimeout(want, 90) }
-  const onLeave = () => { if (timer.current) clearTimeout(timer.current); setFrac(null) }
+  // Touch devices: load before the first touch, as the card comes into view.
+  React.useEffect(() => {
+    const el = ref.current
+    if (!el || !isCoarse() || typeof IntersectionObserver === 'undefined') return
+    const io = new IntersectionObserver((entries) => {
+      if (entries.some((e) => e.isIntersecting)) { want(); io.disconnect() }
+    }, { rootMargin: '200px' })
+    io.observe(el)
+    return () => io.disconnect()
+  }, [want])
+
+  // Native touch listeners (React's touch handlers are passive, so they can't preventDefault).
+  React.useEffect(() => {
+    const el = ref.current
+    if (!el) return
+    let x0 = 0, y0 = 0, mode: 'none' | 'scrub' | 'scroll' = 'none'
+    const fracAt = (clientX: number) => {
+      const r = el.getBoundingClientRect()
+      return Math.max(0, Math.min(0.9999, (clientX - r.left) / r.width))
+    }
+    const start = (e: TouchEvent) => {
+      if (e.touches.length !== 1) { mode = 'scroll'; return }
+      x0 = e.touches[0].clientX; y0 = e.touches[0].clientY; mode = 'none'
+      want()
+    }
+    const move = (e: TouchEvent) => {
+      if (mode === 'scroll' || e.touches.length !== 1) return
+      const t = e.touches[0]
+      if (mode === 'none') {
+        const dx = Math.abs(t.clientX - x0), dy = Math.abs(t.clientY - y0)
+        if (dx < 6 && dy < 6) return
+        mode = dx > dy ? 'scrub' : 'scroll'
+        if (mode === 'scroll') return
+      }
+      e.preventDefault()          // we own this gesture: no page scroll, no click afterwards
+      setFrac(fracAt(t.clientX))
+    }
+    const end = () => { if (mode === 'scrub') setTimeout(() => setFrac(null), 600); mode = 'none' }
+    el.addEventListener('touchstart', start, { passive: true })
+    el.addEventListener('touchmove', move, { passive: false })
+    el.addEventListener('touchend', end)
+    el.addEventListener('touchcancel', end)
+    return () => {
+      el.removeEventListener('touchstart', start)
+      el.removeEventListener('touchmove', move)
+      el.removeEventListener('touchend', end)
+      el.removeEventListener('touchcancel', end)
+    }
+  }, [want])
+
+  // Mouse/pen only; touch is handled natively above.
+  const onEnter = (e: React.PointerEvent<HTMLDivElement>) => {
+    if (e.pointerType === 'touch') return
+    timer.current = setTimeout(want, 90)
+  }
+  const onLeave = (e: React.PointerEvent<HTMLDivElement>) => {
+    if (e.pointerType === 'touch') return
+    if (timer.current) clearTimeout(timer.current)
+    setFrac(null)
+  }
   const onMove = (e: React.PointerEvent<HTMLDivElement>) => {
+    if (e.pointerType === 'touch') return
     const r = e.currentTarget.getBoundingClientRect()
     setFrac(Math.max(0, Math.min(0.9999, (e.clientX - r.left) / r.width)))
   }
@@ -88,13 +157,14 @@ export function ScrubOverlay({ assetId }: { assetId: string }) {
   const idx = sb && frac !== null ? Math.floor(frac * sb.meta.count) : 0
   return (
     <div
+      ref={ref}
       className="absolute inset-0"
       style={{ touchAction: 'pan-y' }}
       onPointerEnter={onEnter}
       onPointerLeave={onLeave}
       onPointerMove={onMove}
-      onPointerDown={(e) => { if (e.pointerType === 'touch') want() }}
       data-osc-scrub={active ? idx : undefined}
+      data-osc-scrub-ready={sb ? 'yes' : 'no'}
     >
       {active && (
         <>

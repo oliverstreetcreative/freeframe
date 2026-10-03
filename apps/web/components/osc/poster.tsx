@@ -58,7 +58,8 @@ export function PosterMenu({ assetId, versionId }: { assetId: string; versionId?
         <button type="button" title="Thumbnail (T = use this frame)" aria-label="Thumbnail options"
           className="inline-flex items-center gap-1.5 rounded-md px-2.5 h-8 text-xs font-medium border border-border text-text-secondary hover:text-text-primary hover:bg-bg-hover transition-colors outline-none focus-visible:[box-shadow:0_0_0_2px_var(--bg-primary),0_0_0_4px_var(--accent)]">
           {busy ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <ImageIcon className="h-3.5 w-3.5" />}
-          Thumbnail
+          {/* icon-only on phones: the label pushed Version/Share off a 390 px top bar */}
+          <span className="hidden sm:inline">Thumbnail</span>
         </button>
       </DropdownMenu.Trigger>
       <DropdownMenu.Portal>
