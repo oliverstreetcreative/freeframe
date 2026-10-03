@@ -52,7 +52,12 @@ def get_storyboard(asset_id: uuid.UUID, version_id: Optional[uuid.UUID] = Query(
         meta = json.loads(get_s3_client().get_object(Bucket=settings.s3_bucket, Key=k["json"])["Body"].read())
     except Exception:
         raise HTTPException(404, "No storyboard for this version")
-    return {"version_id": str(v.id), "meta": meta, "url": generate_presigned_get_url(k["jpg"], expires_in=6 * 3600)}
+    from packages.transcoder.osc_sprite import tier_keys
+    tiers = [{**t, "urls": [generate_presigned_get_url(key, expires_in=6 * 3600)
+                            for key in tier_keys(str(v.id), t["w"], t["sheets"])]}
+             for t in meta.get("tiers", [])]
+    return {"version_id": str(v.id), "meta": meta, "tiers": tiers,
+            "url": generate_presigned_get_url(k["jpg"], expires_in=6 * 3600)}
 
 
 @router.post("/assets/{asset_id}/storyboard")
