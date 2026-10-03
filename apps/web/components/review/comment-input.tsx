@@ -415,7 +415,7 @@ export function CommentInput({
         undefined,
         finalAnnotation,
         replyToId ?? undefined,
-        commentVisibility,
+        allowInternal ? commentVisibility : "public",
         mentionUserIds.length > 0 ? mentionUserIds : undefined,
       );
 
@@ -640,61 +640,72 @@ export function CommentInput({
             </div>
 
             <div className="flex items-center gap-2">
-              {/* Visibility dropdown */}
-              {allowInternal && (
-                <div className="relative" ref={visRef}>
-                  <button
-                    onClick={() => setVisDropdownOpen((p) => !p)}
-                    className={cn(
-                      "inline-flex items-center gap-1.5 h-7 px-2.5 rounded-md text-[12px] transition-colors border",
-                      commentVisibility === "internal"
-                        ? "text-amber-400 border-amber-400/30 bg-amber-400/10"
-                        : "text-text-tertiary hover:bg-bg-tertiary hover:text-text-secondary border-border",
-                    )}
-                  >
-                    {commentVisibility === "internal" ? (
-                      <Lock className="h-3 w-3" />
-                    ) : (
-                      <Globe className="h-3 w-3" />
-                    )}
-                    {commentVisibility === "internal" ? "Internal" : "Public"}
-                    <ChevronDown className="h-3 w-3" />
-                  </button>
-                  {visDropdownOpen && (
-                    <div className="absolute bottom-full right-0 mb-1 z-50 w-44 rounded-xl border border-border bg-bg-elevated shadow-2xl py-1.5 animate-in fade-in zoom-in-95 duration-100">
-                      <button
-                        className={cn(
-                          "flex w-full items-center gap-2.5 px-3 py-2 text-[13px] transition-colors",
-                          commentVisibility === "public"
-                            ? "text-text-primary bg-bg-tertiary"
-                            : "text-text-secondary hover:bg-bg-tertiary",
-                        )}
-                        onClick={() => {
-                          setCommentVisibility("public");
-                          setVisDropdownOpen(false);
-                        }}
-                      >
-                        <Globe className="h-3.5 w-3.5" />
-                        Public
-                      </button>
-                      <button
-                        className={cn(
-                          "flex w-full items-center gap-2.5 px-3 py-2 text-[13px] transition-colors",
-                          commentVisibility === "internal"
-                            ? "text-amber-400 bg-bg-tertiary"
-                            : "text-text-secondary hover:bg-bg-tertiary",
-                        )}
-                        onClick={() => {
-                          setCommentVisibility("internal");
-                          setVisDropdownOpen(false);
-                        }}
-                      >
-                        <Lock className="h-3.5 w-3.5" />
-                        Internal
-                      </button>
-                    </div>
+              {/* Visibility: OSC says plainly who will see this before it posts */}
+              {!allowInternal ? (
+                <span
+                  data-osc-visibility="public-only"
+                  title="Everything posted on a share link is visible to the client"
+                  className="inline-flex items-center gap-1.5 h-7 px-2.5 rounded-md text-[12px] border border-border text-text-secondary"
+                >
+                  <Globe className="h-3 w-3" />
+                  Visible to client
+                </span>
+              ) : (
+              <div className="relative" ref={visRef}>
+                <button
+                  onClick={() => setVisDropdownOpen((p) => !p)}
+                  className={cn(
+                    "inline-flex items-center gap-1.5 h-7 px-2.5 rounded-md text-[12px] transition-colors border",
+                    commentVisibility === "internal"
+                      ? "text-amber-400 border-amber-400/30 bg-amber-400/10"
+                      : "text-text-tertiary hover:bg-bg-tertiary hover:text-text-secondary border-border",
                   )}
-                </div>
+                >
+                  {commentVisibility === "internal" ? (
+                    <Lock className="h-3 w-3" />
+                  ) : (
+                    <Globe className="h-3 w-3" />
+                  )}
+                  <span data-osc-visibility={commentVisibility}>
+                    {commentVisibility === "internal" ? "Internal · OSC only" : "Visible to client"}
+                  </span>
+                  <ChevronDown className="h-3 w-3" />
+                </button>
+                {visDropdownOpen && (
+                  <div className="absolute bottom-full right-0 mb-1 z-50 w-44 rounded-xl border border-border bg-bg-elevated shadow-2xl py-1.5 animate-in fade-in zoom-in-95 duration-100">
+                    <button
+                      className={cn(
+                        "flex w-full items-center gap-2.5 px-3 py-2 text-[13px] transition-colors",
+                        commentVisibility === "public"
+                          ? "text-text-primary bg-bg-tertiary"
+                          : "text-text-secondary hover:bg-bg-tertiary",
+                      )}
+                      onClick={() => {
+                        setCommentVisibility("public");
+                        setVisDropdownOpen(false);
+                      }}
+                    >
+                      <Globe className="h-3.5 w-3.5" />
+                      Visible to client
+                    </button>
+                    <button
+                      className={cn(
+                        "flex w-full items-center gap-2.5 px-3 py-2 text-[13px] transition-colors",
+                        commentVisibility === "internal"
+                          ? "text-amber-400 bg-bg-tertiary"
+                          : "text-text-secondary hover:bg-bg-tertiary",
+                      )}
+                      onClick={() => {
+                        setCommentVisibility("internal");
+                        setVisDropdownOpen(false);
+                      }}
+                    >
+                      <Lock className="h-3.5 w-3.5" />
+                      Internal · OSC only
+                    </button>
+                  </div>
+                )}
+              </div>
               )}
 
               {/* Submit */}
