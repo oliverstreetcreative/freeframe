@@ -1656,11 +1656,27 @@ class FFmpegTranscoder(BaseTranscoder):
                     "zscale=t=bt709:m=bt709:r=tv"
                 )
             thumb_vf += ",format=yuvj420p"
-            thumb_cmd = [
-                "ffmpeg", "-y", "-i", input_url,
-                "-vf", thumb_vf, "-q:v", "2", "-frames:v", "1",
-                str(work_dir / "thumb_%04d.jpg"),
-            ]
+            # OSC: a random GOOD frame after the 5 s slate (15%-85% of the program, re-rolled if
+            # black/white/flat/soft) instead of ffmpeg's `thumbnail` pick from the first ~100
+            # frames, which is always the slate on an OSC render. Falls back to upstream's way.
+            poster_t = None
+            try:
+                from .osc_poster import pick_poster_time
+                poster_t = pick_poster_time(input_url, (meta.duration_seconds or None) if meta else None)
+            except Exception:
+                poster_t = None
+            if poster_t is not None:
+                thumb_cmd = [
+                    "ffmpeg", "-y", "-ss", f"{poster_t:.3f}", "-i", input_url,
+                    "-vf", thumb_vf.replace("thumbnail,", "", 1), "-q:v", "2", "-frames:v", "1",
+                    str(work_dir / "thumb_%04d.jpg"),
+                ]
+            else:
+                thumb_cmd = [
+                    "ffmpeg", "-y", "-i", input_url,
+                    "-vf", thumb_vf, "-q:v", "2", "-frames:v", "1",
+                    str(work_dir / "thumb_%04d.jpg"),
+                ]
             self._run(thumb_cmd, label="ffmpeg")
             thumbnail_key = f"{job.output_s3_prefix}/thumbnail.jpg"
             uploaded_thumb = False

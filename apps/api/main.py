@@ -100,6 +100,8 @@ app.include_router(folders.router)
 app.include_router(hls_proxy.router)
 app.include_router(instance_settings.router)
 app.include_router(instance_branding.router)
+from .routers import osc_poster  # OSC: set/shuffle a version's poster (grid thumbnail)
+app.include_router(osc_poster.router)
 
 @app.get("/health")
 def health():
