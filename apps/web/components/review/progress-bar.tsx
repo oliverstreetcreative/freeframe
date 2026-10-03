@@ -1,7 +1,7 @@
 'use client'
 
 import React, { useCallback, useEffect, useRef, useState } from 'react'
-import { useStoryboard, tileStyle, indexAtTime } from '@/components/osc/scrub'
+import { useStoryboard, tileStyle, indexAtTime, useSharpTier, dpr } from '@/components/osc/scrub'
 import { createPortal } from 'react-dom'
 import Hls from 'hls.js'
 import { cn, formatTimecode } from '@/lib/utils'
@@ -285,6 +285,8 @@ export function ProgressBar({
 }: ProgressBarProps) {
   // OSC: sprite previews when a storyboard exists (loaded eagerly, it's one image)
   const { sb: storyboard } = useStoryboard(storyboardAssetId, true)
+  // the preview box is 160 CSS px wide (w-40): sharp at 160 x devicePixelRatio
+  const seekTier = useSharpTier(storyboard, Math.ceil(160 * dpr()))
   const trackRef = useRef<HTMLDivElement>(null)
   const activePointerIdRef = useRef<number | null>(null)
   const [isDragging, setIsDragging] = useState(false)
@@ -520,7 +522,7 @@ export function ProgressBar({
             <div className="mb-1 rounded-md overflow-hidden border border-white/15 shadow-2xl bg-black w-40"
                  data-osc-seek-preview="sprite">
               <div className="w-full" style={{ aspectRatio: `${storyboard.meta.tile_w} / ${storyboard.meta.tile_h}`,
-                ...tileStyle(storyboard, indexAtTime(storyboard, hoverTime)) }} />
+                ...tileStyle(storyboard, indexAtTime(storyboard, hoverTime), seekTier) }} />
             </div>
           ) : previewImage && (
             <div className="mb-1 rounded-md overflow-hidden border border-white/15 shadow-2xl">
