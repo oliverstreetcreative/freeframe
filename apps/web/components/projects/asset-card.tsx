@@ -8,6 +8,7 @@ import { withBasePath } from '@/lib/base-path'
 import type { Asset, AssetType, User } from '@/types'
 import type { AspectRatio, ThumbnailScale, TitleLines } from '@/stores/view-store'
 import { StatusPill } from '@/components/osc/status'
+import { ScrubOverlay } from '@/components/osc/scrub'
 
 const assetTypeIcons: Record<AssetType, React.ElementType> = {
   video: Film,
@@ -125,6 +126,9 @@ export function AssetCard({
             </div>
           </div>
         )}
+
+        {/* OSC hover-scrub (under the checkbox/pill/badges, which come after it) */}
+        {asset.asset_type === 'video' && <ScrubOverlay assetId={asset.id} />}
 
         {/* Selection checkbox — top-left */}
         {onSelect && (
