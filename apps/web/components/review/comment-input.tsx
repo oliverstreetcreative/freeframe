@@ -64,6 +64,8 @@ interface CommentInputProps {
    * comment is team-only, so the share link would never show it back, and the
    * API refuses one from a caller without access to the asset.
    */
+  /** OSC (Sam 10/3 00:17): staff comments start as Internal. Undefined = public. */
+  defaultVisibility?: "public" | "internal";
   allowInternal?: boolean;
   className?: string;
 }
@@ -207,6 +209,7 @@ export function CommentInput({
   disableAnnotations,
   annotationActive,
   onToggleAnnotation,
+  defaultVisibility,
   allowInternal = true,
   className,
 }: CommentInputProps) {
@@ -245,7 +248,15 @@ export function CommentInput({
   const [error, setError] = React.useState<string | null>(null);
   const [commentVisibility, setCommentVisibility] = React.useState<
     "public" | "internal"
-  >("public");
+  >(defaultVisibility ?? "public");
+  // The staff/role check can resolve after mount: follow the default until the user picks.
+  const visTouchedRef = React.useRef(false);
+  React.useEffect(() => {
+    if (!visTouchedRef.current && defaultVisibility) setCommentVisibility(defaultVisibility);
+  }, [defaultVisibility]);
+  React.useEffect(() => {
+    if (!allowInternal) setCommentVisibility("public");
+  }, [allowInternal]);
   const [visDropdownOpen, setVisDropdownOpen] = React.useState(false);
   const [timecodeAttached, setTimecodeAttached] = React.useState(true);
   const visRef = React.useRef<HTMLDivElement>(null);
@@ -681,6 +692,7 @@ export function CommentInput({
                           : "text-text-secondary hover:bg-bg-tertiary",
                       )}
                       onClick={() => {
+                        visTouchedRef.current = true;
                         setCommentVisibility("public");
                         setVisDropdownOpen(false);
                       }}
@@ -696,6 +708,7 @@ export function CommentInput({
                           : "text-text-secondary hover:bg-bg-tertiary",
                       )}
                       onClick={() => {
+                        visTouchedRef.current = true;
                         setCommentVisibility("internal");
                         setVisDropdownOpen(false);
                       }}
