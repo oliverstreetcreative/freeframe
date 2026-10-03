@@ -17,6 +17,7 @@ import { CommentInput } from '@/components/review/comment-input'
 // ApprovalBar removed for now
 import { VersionSwitcher } from '@/components/review/version-switcher'
 import { StatusPill } from '@/components/osc/status'
+import { PosterMenu } from '@/components/osc/poster'
 import { ShareDialog } from '@/components/review/share-dialog'
 import { CompareOverlay } from '@/components/review/compare/compare-overlay'
 import { useReviewStore } from '@/stores/review-store'
@@ -604,6 +605,7 @@ function ReviewScreenInner({ projectId }: { projectId: string }) {
             }}
           />
           {asset && <StatusPill asset={asset} />}
+          {asset && asset.asset_type === 'video' && <PosterMenu assetId={asset.id} versionId={currentVersion?.id} />}
           <VersionSwitcher versions={versions} />
           {asset && canCompare(asset.asset_type, versions) && (
             <button
