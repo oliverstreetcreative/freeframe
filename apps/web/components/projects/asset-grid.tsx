@@ -9,6 +9,7 @@ import { Button } from '@/components/ui/button'
 import { Avatar } from '@/components/shared/avatar'
 import { EmptyState } from '@/components/shared/empty-state'
 import { AssetCard } from './asset-card'
+import { OSC_STATUS_ORDER, StatusPill, StatusFilterBar, effectiveStatus, passesStatusFilter, useOscStatusVersion } from '@/components/osc/status'
 import { FolderCard } from './folder-card'
 import { AppearancePopover } from './appearance-popover'
 import { SortPopover } from './sort-popover'
@@ -27,13 +28,8 @@ const assetTypeIcons: Record<string, React.ElementType> = {
   image_carousel: Images,
 }
 
-const statusOrder: Record<AssetStatus, number> = {
-  in_review: 0,
-  draft: 1,
-  approved: 2,
-  rejected: 3,
-  archived: 4,
-}
+// OSC status labels: order + effective status come from components/osc/status.tsx
+const statusOrder: Record<AssetStatus, number> = OSC_STATUS_ORDER
 
 interface AssetGridProps {
   assets: Asset[]
@@ -184,8 +180,9 @@ export function AssetGrid({
   const totalSelected = selectedAssetIds.size + selectedFolderIds.size
   const selectedTotalSize = Array.from(selectedAssetIds).reduce((sum, id) => sum + (fileSizes[id] ?? 0), 0)
 
+  const oscStatusVersion = useOscStatusVersion()
   const filtered = React.useMemo(() => {
-    let result = [...assets]
+    let result = assets.filter(passesStatusFilter)
 
     if (sortKey !== 'custom') {
       result.sort((a, b) => {
@@ -195,7 +192,7 @@ export function AssetGrid({
         } else if (sortKey === 'name') {
           cmp = a.name.localeCompare(b.name)
         } else if (sortKey === 'status') {
-          cmp = statusOrder[a.status] - statusOrder[b.status]
+          cmp = statusOrder[effectiveStatus(a)] - statusOrder[effectiveStatus(b)]
         } else if (sortKey === 'type') {
           cmp = a.asset_type.localeCompare(b.asset_type)
         }
@@ -204,7 +201,7 @@ export function AssetGrid({
     }
 
     return result
-  }, [assets, sortKey, sortDirection])
+  }, [assets, sortKey, sortDirection, oscStatusVersion])
 
   const showFolders = !flattenFolders && folders && folders.length > 0
 
@@ -276,6 +273,9 @@ export function AssetGrid({
           )}
         </div>
       )}
+
+      {/* OSC status labels: filter chips (from the unfiltered list, so they never vanish) */}
+      <StatusFilterBar assets={assets} />
 
       {/* ─── Grid view: folders section ──────────────────────────────── */}
       {showFolders && layout === 'grid' && (
@@ -561,6 +561,7 @@ export function AssetGrid({
                 <div className="flex-1 min-w-0">
                   <p className="text-sm font-medium text-text-primary truncate leading-snug">{asset.name}</p>
                 </div>
+                <div className="shrink-0"><StatusPill asset={asset} size="xs" /></div>
                 {/* Uploader */}
                 {showUploader && (
                   <div className="hidden md:block w-32 text-xs text-text-tertiary truncate shrink-0">

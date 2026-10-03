@@ -9,7 +9,7 @@ from datetime import datetime, timedelta, timezone
 from ..database import get_db
 from ..middleware.auth import get_current_user
 from ..models.user import User
-from ..models.asset import Asset, AssetVersion, MediaFile, AssetType, ProcessingStatus, FileType
+from ..models.asset import Asset, AssetVersion, MediaFile, AssetType, ProcessingStatus, FileType, AssetStatus
 from ..models.folder import Folder
 from ..models.project import Project
 from ..services.s3_service import (
@@ -97,6 +97,8 @@ def initiate_upload(
     )
     db.add(version)
     db.flush()
+    # OSC status labels: every new upload / new version lands as "Needs review".
+    asset.status = AssetStatus.in_review
 
     ext = os.path.splitext(body.original_filename)[1].lower()
     s3_key = f"raw/{body.project_id}/{asset.id}/{version.id}/original{ext}"
