@@ -249,6 +249,9 @@ QUALITY_MAP = {
 # What a deployment gets without saying anything. Unchanged behaviour.
 DEFAULT_QUALITIES = ("1080p", "720p", "360p")
 
+# OSC: AAC bitrate for every HLS rung (stereo, 48 kHz). Override with OSC_AUDIO_BITRATE.
+OSC_AUDIO_BITRATE = os.environ.get("OSC_AUDIO_BITRATE", "256k")
+
 
 def rung_height(name: str) -> int:
     """The vertical resolution a rung encodes to (QUALITY_MAP holds `w:h`)."""
@@ -1343,7 +1346,7 @@ class FFmpegTranscoder(BaseTranscoder):
                 if has_audio:
                     cmd += (
                         ["-c:a", "copy"] if audio_codec == "aac"
-                        else ["-c:a", "aac", "-b:a", "192k"]
+                        else ["-c:a", "aac", "-b:a", OSC_AUDIO_BITRATE, "-ac", "2", "-ar", "48000"]
                     )
                 cmd += [
                     "-f", "hls",
@@ -1472,6 +1475,10 @@ class FFmpegTranscoder(BaseTranscoder):
                     ffmpeg_cmd += ["-map", f"[{quality}]"]
                     if has_audio:
                         ffmpeg_cmd += ["-map", "a:0"]
+                        # OSC (Sam 10/3 00:45): explicit review-grade audio. Unset, ffmpeg's
+                        # native AAC fell back to ~128 kb/s; masters are 24-bit 48k stereo.
+                        ffmpeg_cmd += [f"-c:a:{i}", "aac", f"-b:a:{i}", OSC_AUDIO_BITRATE,
+                                       f"-ac:a:{i}", "2", f"-ar:a:{i}", "48000"]
                     if backend == "cpu" or dv_software:
                         enc = "libx265" if family == "hevc" else "libx264"
                         ffmpeg_cmd += [f"-c:v:{i}", enc, "-preset", "fast",
