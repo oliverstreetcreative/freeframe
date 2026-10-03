@@ -1,6 +1,7 @@
 'use client'
 
 import React, { useCallback, useEffect, useRef, useState } from 'react'
+import { useStoryboard, tileStyle, indexAtTime } from '@/components/osc/scrub'
 import { createPortal } from 'react-dom'
 import Hls from 'hls.js'
 import { cn, formatTimecode } from '@/lib/utils'
@@ -39,6 +40,8 @@ interface ProgressBarProps {
   streamUrl?: string | null
   onSeek: (time: number) => void
   className?: string
+  /** OSC: when the asset has a storyboard, previews come from its sprite (no video decoding). */
+  storyboardAssetId?: string
 }
 
 // ─── Frame Preview Hook ───────────────────────────────────────────────────────
@@ -278,7 +281,10 @@ export function ProgressBar({
   streamUrl,
   onSeek,
   className,
+  storyboardAssetId,
 }: ProgressBarProps) {
+  // OSC: sprite previews when a storyboard exists (loaded eagerly, it's one image)
+  const { sb: storyboard } = useStoryboard(storyboardAssetId, true)
   const trackRef = useRef<HTMLDivElement>(null)
   const activePointerIdRef = useRef<number | null>(null)
   const [isDragging, setIsDragging] = useState(false)
@@ -335,9 +341,9 @@ export function ProgressBar({
       if (isDragging) {
         onSeek(time)
       }
-      seekPreview(time)
+      if (!storyboard) seekPreview(time)
     },
-    [isDragging, getTimeFromEvent, onSeek, seekPreview],
+    [isDragging, getTimeFromEvent, onSeek, seekPreview, storyboard],
   )
 
   const handlePointerLeave = useCallback(() => {
@@ -510,7 +516,13 @@ export function ProgressBar({
           style={{ left: hoverX, transform: 'translateX(-50%) translateY(-100%)' }}
         >
           {/* Frame preview */}
-          {previewImage && (
+          {storyboard ? (
+            <div className="mb-1 rounded-md overflow-hidden border border-white/15 shadow-2xl bg-black w-40"
+                 data-osc-seek-preview="sprite">
+              <div className="w-full" style={{ aspectRatio: `${storyboard.meta.tile_w} / ${storyboard.meta.tile_h}`,
+                ...tileStyle(storyboard, indexAtTime(storyboard, hoverTime)) }} />
+            </div>
+          ) : previewImage && (
             <div className="mb-1 rounded-md overflow-hidden border border-white/15 shadow-2xl">
               {/* eslint-disable-next-line @next/next/no-img-element */}
               <img src={previewImage} alt="" className="w-40 object-contain bg-black" />
