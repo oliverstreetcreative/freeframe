@@ -109,21 +109,26 @@ describe('ProgressBar scrubbing', () => {
     expect(onSeek).toHaveBeenLastCalledWith(50)
   })
 
-  it('clamps the hover tooltip to the track bounds during a captured drag past the edge', () => {
+  it('hides the hover tooltip during a captured drag, clamps the seek past the edge, and clamps the hover tooltip', () => {
+    // OSC 0007: the preview is hover-only, so it is hidden while dragging. Upstream's version of
+    // this test clamped the tooltip during the drag; the clamp is still checked on a plain hover.
     const onSeek = vi.fn()
-    const { getByTestId } = render(<ProgressBar currentTime={0} duration={100} onSeek={onSeek} />)
+    const { getByTestId, queryByTestId } = render(<ProgressBar currentTime={0} duration={100} onSeek={onSeek} />)
     const track = getByTestId('progress-bar-track')
 
     fireEvent.pointerDown(track, { pointerId: 1, clientX: 20, isPrimary: true, button: 0 })
-    // Pointer capture means this can keep arriving well outside the track's
-    // own [0, 200] bounds — the seek is already clamped via getTimeFromEvent,
-    // but the floating tooltip has its own, separate positioning.
     fireEvent.pointerMove(track, { pointerId: 1, clientX: -300 })
-
-    const tooltip = getByTestId('progress-bar-hover-tooltip')
-    expect(tooltip.style.left).toBe('0px')
+    expect(queryByTestId('progress-bar-hover-tooltip')).toBeNull()
+    expect(onSeek).toHaveBeenLastCalledWith(0)
 
     fireEvent.pointerMove(track, { pointerId: 1, clientX: 500 })
-    expect(tooltip.style.left).toBe('200px')
+    expect(queryByTestId('progress-bar-hover-tooltip')).toBeNull()
+    expect(onSeek).toHaveBeenLastCalledWith(100)
+
+    fireEvent.pointerUp(track, { pointerId: 1, clientX: 500 })
+    fireEvent.pointerMove(track, { pointerId: 2, clientX: 500 })
+    expect(getByTestId('progress-bar-hover-tooltip').style.left).toBe('200px')
+    fireEvent.pointerMove(track, { pointerId: 2, clientX: -300 })
+    expect(getByTestId('progress-bar-hover-tooltip').style.left).toBe('0px')
   })
 })
