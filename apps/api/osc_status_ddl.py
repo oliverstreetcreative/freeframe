@@ -14,7 +14,22 @@ def main() -> None:
     engine = create_engine(settings.database_url, isolation_level="AUTOCOMMIT")
     with engine.connect() as conn:
         conn.execute(text("ALTER TYPE assetstatus ADD VALUE IF NOT EXISTS 'client_review'"))
-    print("osc_status_ddl: assetstatus has client_review")
+        # OSC 0010: a client's decision from a share link (guests aren't users, so upstream's
+        # approvals table, which needs user_id, can't hold it). One decision per person per version.
+        conn.execute(text("""
+            CREATE TABLE IF NOT EXISTS osc_guest_approvals (
+                id uuid PRIMARY KEY,
+                share_link_id uuid NOT NULL REFERENCES share_links(id),
+                asset_id uuid NOT NULL REFERENCES assets(id),
+                version_id uuid NOT NULL REFERENCES asset_versions(id),
+                email varchar(255) NOT NULL,
+                name varchar(255) NOT NULL,
+                status varchar(16) NOT NULL CHECK (status IN ('approved', 'rejected')),
+                note text,
+                created_at timestamptz NOT NULL DEFAULT now(),
+                UNIQUE (version_id, email)
+            )"""))
+    print("osc_status_ddl: assetstatus has client_review; osc_guest_approvals ready")
 
 
 if __name__ == "__main__":

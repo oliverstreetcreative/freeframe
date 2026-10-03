@@ -69,30 +69,10 @@ def _osc_sync_status(db: Session, asset: Asset, version_id: uuid.UUID) -> None:
     """OSC status labels auto-rule: reviewer decisions on the LATEST version drive the label.
     Any "changes requested" (rejection) on it -> Changes requested; otherwise any approval -> Approved.
     Decisions on an older version never move the label (a new version already reset it to
-    Needs review). FreeFrame has no "required reviewers", so one approval is enough today."""
-    from ..models.asset import AssetStatus, AssetVersion
-
-    latest = (
-        db.query(AssetVersion)
-        .filter(AssetVersion.asset_id == asset.id, AssetVersion.deleted_at.is_(None))
-        .order_by(AssetVersion.version_number.desc())
-        .first()
-    )
-    if not latest or latest.id != version_id:
-        return
-    decisions = {
-        a.status
-        for a in db.query(Approval).filter(
-            Approval.version_id == version_id, Approval.deleted_at.is_(None)
-        )
-    }
-    if ApprovalStatus.rejected in decisions:
-        asset.status = AssetStatus.rejected
-    elif ApprovalStatus.approved in decisions:
-        asset.status = AssetStatus.approved
-    else:
-        return
-    db.commit()
+    Needs review). FreeFrame has no "required reviewers", so one approval is enough today.
+    (0010: the rule lives in services/osc_status_rules.py and also counts client share-link decisions.)"""
+    from ..services.osc_status_rules import sync_status
+    sync_status(db, asset, version_id)
 
 
 @router.post("/assets/{asset_id}/approve", response_model=ApprovalResponse)
