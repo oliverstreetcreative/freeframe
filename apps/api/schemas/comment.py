@@ -26,6 +26,9 @@ class GuestCommentCreate(BaseModel):
     timecode_end: Optional[float] = None
     body: str
     annotation: Optional[AnnotationData] = None
+    # was missing, so a signed-in staffer choosing "Internal" on a share page was silently
+    # saved as public. Now honoured for staff and refused (403) for everyone else.
+    visibility: Optional[str] = "public"
     guest_email: Optional[str] = None  # Not needed if user is logged in
     guest_name: Optional[str] = None
 

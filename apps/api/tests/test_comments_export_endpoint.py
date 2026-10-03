@@ -5,6 +5,17 @@ from unittest.mock import MagicMock, patch
 
 from apps.api.models.asset import AssetType, ProcessingStatus
 
+import pytest
+
+
+@pytest.fixture(autouse=True)
+def _exporter_is_staff():
+    # export now asks whether the caller is staff (internal notes are staff-only). These tests
+    # script db.first() call-by-call, so stub that lookup: the exporter here is staff, which is the
+    # behaviour these tests were written against (every comment exported).
+    with patch("apps.api.routers.comments.is_staff", return_value=True):
+        yield
+
 
 def _asset(asset_type=AssetType.video):
     a = MagicMock()
