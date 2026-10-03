@@ -11,6 +11,7 @@
  * (#117, #123).
  */
 import * as React from 'react'
+import { ShareDecision } from '@/components/osc/share-decision'
 import { ArrowLeft, Download, Loader2, PanelRightClose, PanelRightOpen } from 'lucide-react'
 import { useReview, type CreateCommentPayload } from '@/components/review/review-provider'
 import { useReviewStore } from '@/stores/review-store'
@@ -268,6 +269,9 @@ function ShareReviewInner({
           {showVersions && VersionSwitcher && versions.length > 0 && (
             <VersionSwitcher versions={versions} />
           )}
+          {/* OSC 0010: client approval from the link (only when the link allows approvals) */}
+          <ShareDecision token={token} shareSession={shareSession} assetId={asset.id}
+            versionId={currentVersion?.id} permission={permission} />
           {allowDownload && (
             <button className="flex items-center gap-1.5 h-7 px-3 rounded-md text-xs font-medium text-text-inverse bg-accent hover:bg-accent-hover transition-colors" onClick={() => handleDownload(token, asset.id, shareSession)}>
               <Download className="h-3 w-3" /> Download

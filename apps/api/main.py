@@ -104,6 +104,8 @@ from .routers import osc_poster  # OSC: set/shuffle a version's poster (grid thu
 app.include_router(osc_poster.router)
 from .routers import osc_storyboard  # OSC: hover-scrub storyboards
 app.include_router(osc_storyboard.router)
+from .routers import osc_share_decision  # OSC: client approve / request changes from a share link
+app.include_router(osc_share_decision.router)
 
 @app.get("/health")
 def health():
