@@ -7,6 +7,7 @@ import { cn, formatRelativeTime, formatBytes } from '@/lib/utils'
 import { withBasePath } from '@/lib/base-path'
 import type { Asset, AssetType, User } from '@/types'
 import type { AspectRatio, ThumbnailScale, TitleLines } from '@/stores/view-store'
+import { StatusPill } from '@/components/osc/status'
 
 const assetTypeIcons: Record<AssetType, React.ElementType> = {
   video: Film,
@@ -139,6 +140,9 @@ export function AssetCard({
             <Check className="h-3.5 w-3.5" />
           </button>
         )}
+
+        {/* OSC status label — top-right */}
+        <div className="absolute top-2 right-2"><StatusPill asset={asset} size="xs" /></div>
 
         {/* Duration badge — bottom-right (for video/audio) */}
         {duration != null && duration > 0 && (
