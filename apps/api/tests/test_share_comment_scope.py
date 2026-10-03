@@ -231,17 +231,20 @@ def _listed_to_a_signed_out_caller(real_db, link):
     return [c.body for c in listed]
 
 
-def _member(real_db, project):
+def _member(real_db, project, role=None):
     from apps.api.models.project import ProjectMember, ProjectRole
     member = _user(real_db, "member")
     real_db.add(ProjectMember(project_id=project.id, user_id=member.id,
-                              role=ProjectRole.reviewer))
+                              role=role or ProjectRole.reviewer))
     real_db.flush()
     return member
 
 
 def test_an_internal_comment_from_a_project_member_stays_internal(real_db, seed):
-    member = _member(real_db, seed["project_a"])
+    # OSC 0002: internal notes are staff-only (owner/editor/superadmin), so the member who posts one
+    # here is an editor. A reviewer (an OSC client account) is refused; see the test below.
+    from apps.api.models.project import ProjectRole
+    member = _member(real_db, seed["project_a"], role=ProjectRole.editor)
 
     _post_as(real_db, seed["link"], member, body="team only", visibility="internal")
 
@@ -249,6 +252,19 @@ def test_an_internal_comment_from_a_project_member_stays_internal(real_db, seed)
     assert saved.visibility == "internal"
     assert saved.author_id == member.id
     assert "team only" not in _listed_to_a_signed_out_caller(real_db, seed["link"])
+
+
+def test_osc_an_internal_comment_from_a_reviewer_member_is_refused(real_db, seed):
+    """OSC 0002, a deliberate divergence from upstream: a reviewer is a client, not staff."""
+    from fastapi import HTTPException
+
+    member = _member(real_db, seed["project_a"])
+
+    with pytest.raises(HTTPException) as exc:
+        _post_as(real_db, seed["link"], member, body="client internal", visibility="internal")
+
+    assert exc.value.status_code == 403
+    assert _comments_with_body(real_db, "client internal") == []
 
 
 def test_an_internal_comment_from_an_anonymous_guest_is_refused(real_db, seed):
