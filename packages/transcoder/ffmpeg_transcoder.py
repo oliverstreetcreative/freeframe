@@ -610,6 +610,10 @@ QUALITY_MAP = {
 # What a deployment gets without saying anything. Unchanged behaviour.
 DEFAULT_QUALITIES = ("1080p", "720p", "360p")
 
+# OSC: AAC bitrate for every HLS rung (stereo, 48 kHz) when upstream's TRANSCODER_AUDIO_BITRATE is unset.
+# Override with OSC_AUDIO_BITRATE.
+OSC_AUDIO_BITRATE = os.environ.get("OSC_AUDIO_BITRATE", "256k")
+
 
 def rung_height(name: str) -> int:
     """The short-side resolution a rung names: 1080 for 1080p.
@@ -2122,7 +2126,8 @@ class FFmpegTranscoder(BaseTranscoder):
             # is never short of threads.
             cpu_plan = thread_plan(get_cpu_budget(), len(qualities))
             # Read once for the same reason: a typo is reported once per job.
-            audio_bitrate = get_audio_bitrate() if has_audio else None
+            # OSC 0008: unset TRANSCODER_AUDIO_BITRATE means OSC_AUDIO_BITRATE (256k), not ffmpeg's ~128k.
+            audio_bitrate = (get_audio_bitrate() or OSC_AUDIO_BITRATE) if has_audio else None
 
             hls_dir = work_dir / "hls"
             hls_dir.mkdir()
@@ -2151,7 +2156,7 @@ class FFmpegTranscoder(BaseTranscoder):
                 if has_audio:
                     cmd += (
                         ["-c:a", "copy"] if audio_codec == "aac"
-                        else ["-c:a", "aac", "-b:a", audio_bitrate or "192k"]
+                        else ["-c:a", "aac", "-b:a", audio_bitrate or OSC_AUDIO_BITRATE, "-ac", "2", "-ar", "48000"]
                     )
                 cmd += [
                     "-f", "hls",
@@ -2340,7 +2345,9 @@ class FFmpegTranscoder(BaseTranscoder):
                         ffmpeg_cmd += ["-map", "a:0"]
                         if audio_bitrate:
                             # Indexed per audio stream for the reason above.
-                            ffmpeg_cmd += [f"-c:a:{i}", "aac", f"-b:a:{i}", audio_bitrate]
+                            # OSC (Sam 10/3 00:45): review-grade stereo 48 kHz; masters are 24-bit 48k stereo.
+                            ffmpeg_cmd += [f"-c:a:{i}", "aac", f"-b:a:{i}", audio_bitrate,
+                                           f"-ac:a:{i}", "2", f"-ar:a:{i}", "48000"]
                     if backend == "cpu" or dv_software:
                         enc = "libx265" if family == "hevc" else "libx264"
                         ffmpeg_cmd += [f"-c:v:{i}", enc, "-preset", "fast",

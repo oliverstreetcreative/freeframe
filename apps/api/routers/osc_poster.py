@@ -40,6 +40,29 @@ def _internal_url(key: str) -> str:
         "get_object", Params={"Bucket": settings.s3_bucket, "Key": key}, ExpiresIn=900)
 
 
+@router.post("/assets/{asset_id}/retranscode")
+def retranscode(asset_id: uuid.UUID, version_id: Optional[uuid.UUID] = None, db: Session = Depends(get_db),
+                current_user: User = Depends(get_current_user)):
+    """OSC (staff): re-run the transcode for the newest (or given) version, e.g. after an encoder
+    setting changes (10/3: audio 128k -> 256k). The version shows `processing` until it finishes;
+    the original upload is untouched."""
+    from ..tasks.transcode_tasks import process_asset
+    from ..tasks.celery_app import send_task_safe
+    asset = db.query(Asset).filter(Asset.id == asset_id, Asset.deleted_at.is_(None)).first()
+    if not asset:
+        raise HTTPException(404, "Asset not found")
+    if not is_staff(db, asset.project_id, current_user):
+        raise HTTPException(403, "Only OSC staff can re-transcode")
+    q = db.query(AssetVersion).filter(AssetVersion.asset_id == asset_id, AssetVersion.deleted_at.is_(None),
+                                      AssetVersion.processing_status == ProcessingStatus.ready)
+    version = q.filter(AssetVersion.id == version_id).first() if version_id else \
+        q.order_by(AssetVersion.version_number.desc()).first()
+    if not version:
+        raise HTTPException(404, "No ready version")
+    send_task_safe(process_asset, str(asset.id), str(version.id))
+    return {"queued": True, "version_id": str(version.id)}
+
+
 @router.post("/assets/{asset_id}/poster")
 def set_poster(asset_id: uuid.UUID, body: PosterRequest, db: Session = Depends(get_db),
                current_user: User = Depends(get_current_user)):
