@@ -152,7 +152,7 @@ function ShareReviewInner({
   // Guest identity flow for non-authenticated users
   const [guestIdentity, setGuestIdentity] = React.useState<{ name: string; email: string } | null>(null)
   const [showGuestPrompt, setShowGuestPrompt] = React.useState(false)
-  const pendingCommentRef = React.useRef<{ body: string; timecodeStart?: number; timecodeEnd?: number; annotationData?: Record<string, unknown> } | null>(null)
+  const pendingCommentRef = React.useRef<{ body: string; timecodeStart?: number; timecodeEnd?: number; annotationData?: Record<string, unknown>; parentId?: string } | null>(null)
   React.useEffect(() => {
     try {
       const stored = localStorage.getItem('ff_guest_identity')
@@ -161,8 +161,9 @@ function ShareReviewInner({
   }, [])
   const isLoggedIn = typeof window !== 'undefined' && !!localStorage.getItem('ff_access_token')
 
-  const submitComment = React.useCallback(async (body: string, timecodeStart?: number, timecodeEnd?: number, annotationData?: Record<string, unknown>) => {
+  const submitComment = React.useCallback(async (body: string, timecodeStart?: number, timecodeEnd?: number, annotationData?: Record<string, unknown>, parentId?: string) => {
     const payload: CreateCommentPayload = { body }
+    if (parentId) payload.parent_id = parentId
     if (currentVersion?.id) payload.version_id = currentVersion.id
     if (timecodeStart != null) payload.timecode_start = timecodeStart
     if (timecodeEnd != null) payload.timecode_end = timecodeEnd
@@ -179,9 +180,9 @@ function ShareReviewInner({
 
     // Auto-submit the pending comment
     if (pendingCommentRef.current) {
-      const { body, timecodeStart, timecodeEnd, annotationData } = pendingCommentRef.current
+      const { body, timecodeStart, timecodeEnd, annotationData, parentId } = pendingCommentRef.current
       pendingCommentRef.current = null
-      setTimeout(() => submitComment(body, timecodeStart, timecodeEnd, annotationData), 50)
+      setTimeout(() => submitComment(body, timecodeStart, timecodeEnd, annotationData, parentId), 50)
     }
   }, [submitComment])
 
@@ -215,7 +216,16 @@ function ShareReviewInner({
       onAddReaction={() => {}}
       onRemoveReaction={() => {}}
       onReply={() => {}}
-      onSubmitReply={async () => {}}
+      onSubmitReply={canComment ? async (parentId: string, body: string) => {
+        const hasAuth = !!localStorage.getItem('ff_access_token')
+        const hasGuest = !!localStorage.getItem('ff_guest_identity')
+        if (!hasAuth && !hasGuest) {
+          pendingCommentRef.current = { body, parentId }
+          setShowGuestPrompt(true)
+          return
+        }
+        await submitComment(body, undefined, undefined, undefined, parentId)
+      } : undefined}
     />
   ) : null
 

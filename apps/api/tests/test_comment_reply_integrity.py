@@ -191,3 +191,26 @@ def test_a_real_reply_is_still_rendered(real_db, monkeypatch):
 
     resp = comments_module._build_comment_response(parent, real_db)
     assert [r.body for r in resp.replies] == ["a genuine reply"]
+
+
+def test_a_share_link_reply_cannot_be_parented_to_another_assets_comment(real_db, monkeypatch):
+    """POST /share/{token}/comment wrote parent_id straight through, unlike create_comment,
+    so a share-link reply could be rendered inside another asset's thread."""
+    from types import SimpleNamespace
+    from fastapi import HTTPException
+    from apps.api.models.share import SharePermission
+    from apps.api.schemas.comment import GuestCommentCreate
+    import apps.api.routers.comments as comments_module
+
+    owner, [(asset_a, version_a), (asset_b, version_b)] = _seed(real_db, monkeypatch)
+    on_b = _comment(real_db, asset_b, version_b, owner)
+    link = SimpleNamespace(id=uuid.uuid4(), asset_id=asset_a.id, permission=SharePermission.comment)
+    monkeypatch.setattr(comments_module, "validate_share_link_with_session", lambda *a, **k: link)
+    monkeypatch.setattr(comments_module, "validate_asset_in_share", lambda *a, **k: None)
+
+    with pytest.raises(HTTPException) as exc:
+        comments_module.guest_comment(
+            "tok", GuestCommentCreate(version_id=version_a.id, body="injected", parent_id=on_b.id),
+            share_session=None, db=real_db, current_user=owner,
+        )
+    assert exc.value.status_code == 400

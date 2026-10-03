@@ -1025,6 +1025,16 @@ def guest_comment(
             db.flush()
         guest_author_id = guest.id
 
+    # A reply's parent must be a live comment on this asset (same rule as POST /assets/{id}/comments).
+    if body.parent_id is not None:
+        parent = db.query(Comment).filter(
+            Comment.id == body.parent_id,
+            Comment.asset_id == asset.id,
+            Comment.deleted_at.is_(None),
+        ).first()
+        if not parent:
+            raise HTTPException(status_code=400, detail="parent_id does not belong to this asset")
+
     comment = Comment(
         asset_id=asset.id,
         version_id=version_id,
