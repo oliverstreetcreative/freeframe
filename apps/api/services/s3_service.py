@@ -154,7 +154,12 @@ def ensure_bucket_exists():
         # origin from FRONTEND_URL in AllowedOrigins (e.g.
         # https://host/freeframe -> https://host). Mirrors the CORS origin
         # used in main.py.
-        _allowed_origins = [o for o in [settings.frontend_origin, "http://localhost:3000"] if o]
+        # OSC 0012: the extra CORS_ALLOW_ORIGINS the API already trusts get bucket rules too, so a
+        # second site embedding the player (hls.js fetching presigned segments) isn't refused by
+        # storage. A wildcard is never copied onto the bucket.
+        _extra = [o.strip().rstrip("/") for o in settings.cors_allow_origins.split(",")
+                  if o.strip() and o.strip() != "*"]
+        _allowed_origins = [o for o in [settings.frontend_origin, *_extra, "http://localhost:3000"] if o]
         try:
             # One rule per origin: Garage joins a rule's AllowedOrigins into a single
             # comma-separated Access-Control-Allow-Origin response header, which
