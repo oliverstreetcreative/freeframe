@@ -12,9 +12,10 @@ import {
   ChevronUp,
   Check,
 } from 'lucide-react'
-import { cn, formatTime, formatTimecode, formatFrames } from '@/lib/utils'
+import { cn, formatTime, formatFrames } from '@/lib/utils'
 import { api } from '@/lib/api'
 import { useReviewStore, type TimeFormat } from '@/stores/review-store'
+import { useSourceTimecode } from '@/hooks/use-source-timecode' // OSC 0013
 import { useReview } from '@/components/review/review-provider'
 import { ProgressBar } from './progress-bar'
 import type { Asset, AssetVersion, Comment } from '@/types'
@@ -229,12 +230,14 @@ export function AudioPlayer({ asset, version, comments = [], className }: AudioP
     wavesurferRef.current.seekTo(time / duration)
   }
 
+  // OSC 0013: timecode mode shows the file's real source TC (frame 0 = embedded start TC).
+  const sourceTimecode = useSourceTimecode()
   function displayTime(t: number): string {
     switch (timeFormat) {
       case 'frames': return formatFrames(t)
       case 'standard': return formatTime(t)
-      case 'timecode': return formatTimecode(t)
-      default: return formatTimecode(t)
+      case 'timecode': return sourceTimecode(t)
+      default: return sourceTimecode(t)
     }
   }
 
