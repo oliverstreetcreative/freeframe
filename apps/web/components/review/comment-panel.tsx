@@ -28,7 +28,7 @@ import {
   Lock,
   Download,
 } from "lucide-react";
-import { cn, formatTime, formatRelativeTime } from "@/lib/utils";
+import { cn, formatTime, formatRelativeTime, formatSourceTimecode } from "@/lib/utils";
 import { useReviewStore } from "@/stores/review-store";
 import type { Asset } from "@/types";
 import type { CommentWithReplies } from "@/hooks/use-comments";
@@ -427,6 +427,17 @@ function CommentItem({
   const setActiveAnnotation = useReviewStore((s) => s.setActiveAnnotation);
   const showAnnotation = onShowAnnotation ?? setActiveAnnotation;
   const setFocusedCommentId = useReviewStore((s) => s.setFocusedCommentId);
+  // OSC 0013: in timecode mode the chip shows the clip's real source TC (e.g. 00:59:57:13, the
+  // frame Resolve shows), when the start TC loaded is THIS comment's version's. Otherwise (standard
+  // mode, unknown TC, another version's comment) it reads as before. Display only.
+  const timeFormat = useReviewStore((s) => s.timeFormat);
+  const sourceTc = useReviewStore((s) => s.sourceTc);
+  const chipTime = (s: number): string =>
+    timeFormat === "timecode" &&
+    sourceTc?.startFrames != null &&
+    sourceTc.versionId === comment.version_id
+      ? formatSourceTimecode(s, sourceTc.startFrames, sourceTc.fps)
+      : formatTime(s);
   const itemRef = React.useRef<HTMLDivElement>(null);
   const [showReplies, setShowReplies] = React.useState(true);
   const [showEmojiPicker, setShowEmojiPicker] = React.useState(false);
@@ -562,10 +573,10 @@ function CommentItem({
                   title="Jump to timecode"
                 >
                   <Clock className="h-2.5 w-2.5" />
-                  {formatTime(comment.timecode_start)}
+                  {chipTime(comment.timecode_start)}
                   {comment.timecode_end !== null &&
                     comment.timecode_end !== undefined && (
-                      <> — {formatTime(comment.timecode_end)}</>
+                      <> — {chipTime(comment.timecode_end)}</>
                     )}
                 </button>
               )}

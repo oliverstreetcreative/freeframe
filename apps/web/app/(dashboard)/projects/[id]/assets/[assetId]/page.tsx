@@ -39,9 +39,10 @@ import {
   GitCompareArrows,
 } from 'lucide-react'
 import Link from 'next/link'
-import { cn, formatTimecode } from '@/lib/utils'
+import { cn } from '@/lib/utils'
 import { PoweredByBadge } from '@/components/shared/powered-by-badge'
 import { usePageTitle } from '@/hooks/use-page-title'
+import { useSourceTimecode } from '@/hooks/use-source-timecode'
 import type { Project, AssetResponse, ProjectMember, FolderTreeNode } from '@/types'
 
 const acceptByType: Record<string, string> = {
@@ -57,6 +58,7 @@ function ReviewScreenInner({ projectId }: { projectId: string }) {
   const searchParams = useSearchParams()
   const { asset, versions, isLoading, refetchComments, refetchVersions } = useReview()
   const { currentVersion, isDrawingMode, focusedCommentId, playheadTime, seekTo, setFocusedCommentId, setActiveAnnotation } = useReviewStore()
+  const sourceTimecode = useSourceTimecode() // OSC 0013: the clip's real TC on the mobile sheet
   const { user } = useAuthStore()
   const startVersionUpload = useUploadStore((s) => s.startVersionUpload)
   const versionFileInputRef = useRef<HTMLInputElement>(null)
@@ -717,7 +719,7 @@ function ReviewScreenInner({ projectId }: { projectId: string }) {
           // sheet's mini transport rather than leaving a dead play button.
           currentTime={
             asset.asset_type === 'video' || asset.asset_type === 'audio'
-              ? formatTimecode(playheadTime ?? 0)
+              ? sourceTimecode(playheadTime ?? 0)
               : ''
           }
           lockedToCompose={isDrawingMode}

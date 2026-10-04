@@ -34,3 +34,84 @@ def probe_start_tc(s3_key_raw) -> Optional[str]:
         if _TC.match(line):
             return line
     return None
+
+
+# OSC 0013: the player shows the clip's REAL source timecode (frame 0 = the file's embedded start
+# TC, e.g. 00:59:55:00 for a slated render), not 00:00:00:00. One probe per version, cached in
+# osc_version_tc (created in osc_status_ddl.py); a None result is cached too so a file with no
+# timecode tag is never re-probed on every page load.
+
+def nominal_fps(fps) -> Optional[int]:
+    """Timecode base: 23.976 -> 24, 29.97 -> 30, 59.94 -> 60; None for missing/bad input."""
+    try:
+        n = int(round(float(fps)))
+    except (TypeError, ValueError):
+        return None
+    return n if n > 0 else None
+
+
+def tc_to_frames(tc: str, fps: float) -> int:
+    """'HH:MM:SS:FF' -> absolute frame count in the nominal base. A ';' separator (drop-frame) on a
+    29.97/59.94 source uses SMPTE drop-frame math (2 / 4 frame numbers skipped each minute except
+    every tenth); otherwise non-drop. Raises ValueError on a malformed string or bad fps."""
+    if not isinstance(tc, str) or not _TC.match(tc):
+        raise ValueError(f"not a timecode: {tc!r}")
+    tb = nominal_fps(fps)
+    if tb is None:
+        raise ValueError(f"bad fps: {fps!r}")
+    hh, mm, ss, ff = (int(p) for p in re.split(r"[:;]", tc))
+    total = ((hh * 60 + mm) * 60 + ss) * tb + ff
+    if ";" in tc and tb in (30, 60):
+        drop = 2 if tb == 30 else 4
+        total_min = hh * 60 + mm
+        total -= drop * (total_min - total_min // 10)
+    return total
+
+
+def source_tc_for_version(db, version) -> dict:
+    """{start_tc, fps, start_frames} for a version; every value None when unknown."""
+    from sqlalchemy import text
+    from ..models.asset import MediaFile
+
+    empty = {"start_tc": None, "fps": None, "start_frames": None}
+    if version is None:
+        return empty
+    vid = str(version.id)
+    try:
+        row = db.execute(text("SELECT start_tc, fps FROM osc_version_tc WHERE version_id = :v"),
+                         {"v": vid}).fetchone()
+    except Exception:
+        # Table missing (DDL not run yet): fall through to a live probe; clear the failed txn.
+        row = None
+        try:
+            db.rollback()
+        except Exception:
+            pass
+    if row is not None:
+        start_tc, fps = row[0], row[1]
+    else:
+        mf = db.query(MediaFile).filter(MediaFile.version_id == version.id).first()
+        fps = mf.fps if mf is not None else None
+        start_tc = probe_start_tc(mf.s3_key_raw if mf is not None else None)
+        try:
+            db.execute(text("""
+                INSERT INTO osc_version_tc (version_id, start_tc, fps) VALUES (:v, :tc, :fps)
+                ON CONFLICT (version_id) DO UPDATE
+                  SET start_tc = EXCLUDED.start_tc, fps = EXCLUDED.fps, probed_at = now()"""),
+                {"v": vid, "tc": start_tc, "fps": fps})
+            db.commit()
+        except Exception:
+            # The cache is an optimisation; never fail the request over it.
+            try:
+                db.rollback()
+            except Exception:
+                pass
+    start_frames = None
+    if start_tc and fps:
+        try:
+            start_frames = tc_to_frames(start_tc, fps)
+        except ValueError:
+            start_frames = None
+    return {"start_tc": start_tc if start_frames is not None else None,
+            "fps": float(fps) if fps else None,
+            "start_frames": start_frames}

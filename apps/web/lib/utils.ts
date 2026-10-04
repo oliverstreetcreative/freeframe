@@ -42,6 +42,35 @@ export function formatTimecode(seconds: number, fps = 24): string {
 }
 
 /**
+ * OSC 0013: timecode as the SOURCE FILE counts it — frame 0 is the file's embedded start TC
+ * (e.g. 00:59:55:00 for a render with a 5 s slate pre-roll), not 00:00:00:00.
+ * `startFrames` is that start TC as an absolute frame count in the nominal base (from the API);
+ * null means unknown, which falls back to today's count-from-zero display.
+ * Drop-frame sources (29.97/59.94 with ';') are labelled with NON-drop arithmetic here, so a long
+ * DF clip can drift a few frames from its true label — acceptable for review notes; exports use
+ * the server's exact math.
+ */
+export function formatSourceTimecode(
+  seconds: number,
+  startFrames: number | null | undefined,
+  fps: number | null | undefined,
+): string {
+  const real = fps && fps > 0 ? fps : 24
+  const base = Math.max(1, Math.round(real))
+  if (startFrames == null) return formatTimecode(seconds, base)
+  const frameIndex = Math.floor(Math.max(0, seconds) * real + 1e-6)
+  const total = startFrames + frameIndex
+  const ff = total % base
+  const totalSeconds = Math.floor(total / base)
+  return [
+    String(Math.floor(totalSeconds / 3600) % 24).padStart(2, '0'),
+    String(Math.floor(totalSeconds / 60) % 60).padStart(2, '0'),
+    String(totalSeconds % 60).padStart(2, '0'),
+    String(ff).padStart(2, '0'),
+  ].join(':')
+}
+
+/**
  * Format seconds as frame count at given fps
  * e.g. 83.5 at 24fps → "2004"
  */
