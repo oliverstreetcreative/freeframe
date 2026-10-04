@@ -29,7 +29,16 @@ def main() -> None:
                 created_at timestamptz NOT NULL DEFAULT now(),
                 UNIQUE (version_id, email)
             )"""))
-    print("osc_status_ddl: assetstatus has client_review; osc_guest_approvals ready")
+        # OSC 0013: cached embedded start timecode per version (one ffprobe per version, ever).
+        # start_tc NULL = probed, the file has no timecode tag (cached so it isn't re-probed).
+        conn.execute(text("""
+            CREATE TABLE IF NOT EXISTS osc_version_tc (
+                version_id uuid PRIMARY KEY REFERENCES asset_versions(id) ON DELETE CASCADE,
+                start_tc varchar(16),
+                fps double precision,
+                probed_at timestamptz NOT NULL DEFAULT now()
+            )"""))
+    print("osc_status_ddl: assetstatus has client_review; osc_guest_approvals, osc_version_tc ready")
 
 
 if __name__ == "__main__":

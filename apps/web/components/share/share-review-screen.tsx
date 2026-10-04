@@ -18,7 +18,7 @@ import { useReviewStore } from '@/stores/review-store'
 import { MobileCommentSheet, PEEK_PX, type SheetState } from '@/components/review/mobile-comment-sheet'
 import { useMediaQuery } from '@/hooks/use-media-query'
 import { useMediaTransport } from '@/hooks/use-media-transport'
-import { formatTimecode } from '@/lib/utils'
+import { useSourceTimecode } from '@/hooks/use-source-timecode'
 import type { SharePermission } from '@/types'
 import { handleDownload } from './share-download'
 
@@ -98,6 +98,7 @@ function ShareReviewInner({
 }: any) {
   const { asset, versions, isLoading, comments, refetchComments, addComment } = useReview()
   const { currentVersion, isDrawingMode, focusedCommentId, playheadTime } = useReviewStore()
+  const sourceTimecode = useSourceTimecode() // OSC 0013: the clip's real TC on the mobile sheet
   const [sidebarOpen, setSidebarOpen] = React.useState(() => typeof window !== 'undefined' && window.matchMedia('(min-width: 768px)').matches)
 
   // Same rule as the project review screen: a bottom sheet on a portrait phone
@@ -377,7 +378,7 @@ function ShareReviewInner({
           onTogglePlay={togglePlay}
           currentTime={
             asset.asset_type === 'video' || asset.asset_type === 'audio'
-              ? formatTimecode(playheadTime ?? 0)
+              ? sourceTimecode(playheadTime ?? 0)
               : ''
           }
           lockedToCompose={isDrawingMode}

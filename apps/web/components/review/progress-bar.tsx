@@ -4,8 +4,9 @@ import React, { useCallback, useEffect, useRef, useState } from 'react'
 import { useStoryboard, tileStyle, indexAtTime, useSharpTier, dpr } from '@/components/osc/scrub'
 import { createPortal } from 'react-dom'
 import Hls from 'hls.js'
-import { cn, formatTimecode } from '@/lib/utils'
+import { cn } from '@/lib/utils'
 import { useReviewStore } from '@/stores/review-store'
+import { useSourceTimecode } from '@/hooks/use-source-timecode' // OSC 0013
 import type { Comment } from '@/types'
 
 // ─── Avatar helpers ───────────────────────────────────────────────────────────
@@ -180,6 +181,7 @@ function CommentMarker({
   const setFocusedCommentId = useReviewStore((s) => s.setFocusedCommentId)
   const setActiveAnnotation = useReviewStore((s) => s.setActiveAnnotation)
   const seekTo = useReviewStore((s) => s.seekTo)
+  const sourceTimecode = useSourceTimecode() // OSC 0013: the clip's real TC
   const [tooltipPos, setTooltipPos] = useState<{ left: number; top: number } | null>(null)
 
   // Recalculate tooltip position when hovered to avoid viewport clipping
@@ -252,7 +254,7 @@ function CommentMarker({
               <span className="text-xs font-medium text-white truncate">{authorName}</span>
               {comment.timecode_start !== null && (
                 <span className="ml-auto text-[10px] font-mono text-indigo-400 bg-indigo-500/10 px-1.5 py-0.5 rounded">
-                  {formatTimecode(comment.timecode_start)}
+                  {sourceTimecode(comment.timecode_start)}
                 </span>
               )}
             </div>
@@ -296,6 +298,7 @@ export function ProgressBar({
   const [hoverX, setHoverX] = useState(0)
   const [hoveredCommentId, setHoveredCommentId] = useState<string | null>(null)
   const focusedCommentId = useReviewStore((s) => s.focusedCommentId)
+  const sourceTimecode = useSourceTimecode() // OSC 0013: the clip's real TC in the hover tooltip
 
   const { previewImage, seekPreview, clearPreview } = useFramePreview(streamUrl)
 
@@ -538,7 +541,7 @@ export function ProgressBar({
           {/* Time label */}
           <div className="flex justify-center">
             <span className="bg-black/90 text-white text-[11px] font-mono px-2 py-0.5 rounded-md">
-              {formatTimecode(hoverTime)}
+              {sourceTimecode(hoverTime)}
             </span>
           </div>
         </div>
