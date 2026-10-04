@@ -1,4 +1,5 @@
 import logging
+import os as _os  # OSC 0014
 import secrets
 import uuid
 from datetime import datetime, timedelta, timezone
@@ -1586,6 +1587,12 @@ def _share_media_file(db: Session, link, asset, version_id: Optional[uuid.UUID])
     return media_file
 
 
+def _osc_share_downloads_master() -> bool:
+    """OSC 0014: share-link downloads hand over the uploaded file (delivery master / original photo)
+    unless OSC_SHARE_DOWNLOAD=mp4, which restores upstream (transcode, original per instance setting)."""
+    return _os.environ.get("OSC_SHARE_DOWNLOAD", "original").strip().lower() != "mp4"
+
+
 @router.get(
     "/share/{token}/downloads/{asset_id}",
     response_model=list[DownloadOption],
@@ -1610,7 +1617,8 @@ def list_share_download_options(
     media_file = _share_media_file(db, link, asset, version_id)
     choices = download_choices(
         asset.asset_type, media_file,
-        allow_original=may_download_original(db, asset, current_user),
+        # OSC 0014: on a link with downloads on, the original is always offered (and listed first).
+        allow_original=_osc_share_downloads_master() or may_download_original(db, asset, current_user),
     )
     describe_choices(asset.asset_type, media_file, choices)
     return [
@@ -1658,12 +1666,16 @@ def get_share_stream_url(
         # falling back to the camera master for versions that predate it (see
         # routers/assets.py). The original by name only where the instance
         # lets people outside the project have it.
+        # OSC 0014: a share link with downloads on is how a client takes DELIVERY, so a download
+        # that names nothing hands over the uploaded file (the master, or a photo's original JPEG),
+        # and the link itself is the permission for it.
+        osc_master = _osc_share_downloads_master()
         choice = pick_or_refuse(
             asset, media_file, rendition,
-            allow_original=original_allowed_for_download(
+            allow_original=osc_master or original_allowed_for_download(
                 db, asset, current_user, rendition, prefer_original,
             ),
-            prefer_original=prefer_original,
+            prefer_original=prefer_original or osc_master,
         )
         url = generate_presigned_get_url(
             choice.s3_key, download_filename=download_filename(asset, media_file, choice),

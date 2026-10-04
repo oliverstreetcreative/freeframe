@@ -257,8 +257,11 @@ def test_watching_a_video_is_untouched_by_any_of_this(
 def test_a_share_link_download_serves_the_mp4_rung_too(
     mock_validate, mock_validate_in_share, mock_get_asset,
     mock_get_latest_media_file, mock_presign, mock_log_activity,
-    client, mock_db,
+    client, mock_db, monkeypatch,
 ):
+    # OSC 0014: a share-link download hands over the uploaded master by default;
+    # OSC_SHARE_DOWNLOAD=mp4 restores upstream's MP4 rung, which is what this test pins.
+    monkeypatch.setenv("OSC_SHARE_DOWNLOAD", "mp4")
     asset_id = uuid.uuid4()
 
     link = MagicMock()
