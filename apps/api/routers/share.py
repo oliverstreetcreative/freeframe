@@ -1,3 +1,4 @@
+import os as _os  # OSC 0014
 import secrets
 import uuid
 from datetime import datetime, timedelta, timezone
@@ -1460,13 +1461,13 @@ def get_share_stream_url(
 
     if asset.asset_type == AssetType.video and media_file.s3_key_processed:
         if download:
-            # The MP4 rung remuxed from the top rendition, falling back to the
-            # camera master for versions that predate it (see routers/assets.py).
-            s3_key = (
-                media_file.s3_key_download
-                or media_file.s3_key_raw
-                or media_file.s3_key_processed
-            )
+            # OSC 0014: a share link is how a client takes DELIVERY, so it hands over the file that
+            # was uploaded (the delivery master), not the web MP4 remuxed from the top HLS rung.
+            # OSC_SHARE_DOWNLOAD=mp4 restores upstream's choice.
+            if _os.environ.get("OSC_SHARE_DOWNLOAD", "original").strip().lower() == "mp4":
+                s3_key = media_file.s3_key_download or media_file.s3_key_raw or media_file.s3_key_processed
+            else:
+                s3_key = media_file.s3_key_raw or media_file.s3_key_download or media_file.s3_key_processed
             filename = build_download_filename(asset.name, s3_key, media_file.original_filename)
             url = generate_presigned_get_url(s3_key, download_filename=filename)
         else:
