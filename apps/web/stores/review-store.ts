@@ -4,6 +4,16 @@ import type { Asset, AssetVersion } from '@/types'
 type DrawingTool = 'pen' | 'rectangle' | 'arrow' | 'line'
 export type TimeFormat = 'standard' | 'timecode' | 'frames'
 
+// OSC 0013: the current version's embedded start timecode (frame count in the nominal base) and
+// real fps, from /source-tc. null fields = unknown -> timecode displays count from 0 as before.
+export interface SourceTc {
+  versionId: string | null
+  startFrames: number | null
+  fps: number | null
+}
+
+export const EMPTY_SOURCE_TC: SourceTc = { versionId: null, startFrames: null, fps: null }
+
 interface ReviewState {
   currentAsset: Asset | null
   currentVersion: AssetVersion | null
@@ -13,6 +23,7 @@ interface ReviewState {
   pendingAnnotation: Record<string, unknown> | null
   activeAnnotation: Record<string, unknown> | null
   timeFormat: TimeFormat
+  sourceTc: SourceTc // OSC 0013
   isDrawingMode: boolean
   drawingTool: DrawingTool
   drawingColor: string
@@ -25,6 +36,7 @@ interface ReviewState {
   setPendingAnnotation: (data: Record<string, unknown> | null) => void
   setActiveAnnotation: (data: Record<string, unknown> | null) => void
   setTimeFormat: (format: TimeFormat) => void
+  setSourceTc: (tc: SourceTc) => void // OSC 0013
   toggleDrawingMode: () => void
   setIsDrawingMode: (mode: boolean) => void
   setDrawingTool: (tool: DrawingTool) => void
@@ -42,6 +54,7 @@ const initialState = {
   pendingAnnotation: null,
   activeAnnotation: null,
   timeFormat: 'timecode' as TimeFormat,
+  sourceTc: EMPTY_SOURCE_TC,
   isDrawingMode: false,
   drawingTool: 'pen' as DrawingTool,
   drawingColor: '#FF3B30',
@@ -85,6 +98,10 @@ export const useReviewStore = create<ReviewState>()((set) => ({
 
   setTimeFormat: (format: TimeFormat) => {
     set({ timeFormat: format })
+  },
+
+  setSourceTc: (tc: SourceTc) => {
+    set({ sourceTc: tc })
   },
 
   toggleDrawingMode: () => {

@@ -18,7 +18,7 @@ import { useReviewStore } from '@/stores/review-store'
 import { MobileCommentSheet, PEEK_PX, type SheetState } from '@/components/review/mobile-comment-sheet'
 import { useMediaQuery } from '@/hooks/use-media-query'
 import { useMediaTransport } from '@/hooks/use-media-transport'
-import { formatTimecode } from '@/lib/utils'
+import { useSourceTimecode } from '@/hooks/use-source-timecode'
 import type { SharePermission } from '@/types'
 import { fetchShareDownloadOptions, handleDownload } from './share-download'
 import { DownloadMenu } from '@/components/shared/download-menu'
@@ -107,6 +107,7 @@ function ShareReviewInner({
 }: any) {
   const { asset, versions, isLoading, comments, refetchComments, addComment, togglePlayback } = useReview()
   const { currentVersion, isDrawingMode, focusedCommentId, playheadTime } = useReviewStore()
+  const sourceTimecode = useSourceTimecode() // OSC 0013: the clip's real TC on the mobile sheet
   // An asset opens on its comments: that pane is the reason an asset link
   // exists. The folder grid is the surface that starts closed. Below `md` the
   // sheet's peek band stands in for it, as on the project review page.
@@ -404,7 +405,7 @@ function ShareReviewInner({
           onTogglePlay={togglePlay}
           currentTime={
             asset.asset_type === 'video' || asset.asset_type === 'audio'
-              ? formatTimecode(playheadTime ?? 0)
+              ? sourceTimecode(playheadTime ?? 0)
               : ''
           }
           lockedToCompose={isDrawingMode}

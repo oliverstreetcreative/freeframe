@@ -23,6 +23,7 @@ import { cn, formatTime, formatTimecode, formatFrames } from "@/lib/utils";
 import { useReviewStore } from "@/stores/review-store";
 import { useReview } from "./review-provider";
 import { useDrawing } from "@/hooks/use-drawing";
+import { useSourceTimecode } from "@/hooks/use-source-timecode"; // OSC 0013
 import { api } from "@/lib/api";
 import { resolveSubmitTimecode } from "@/lib/resolve-submit-timecode";
 import type { User } from "@/types";
@@ -294,6 +295,12 @@ export function CommentInput({
   const canAnnotate = assetType !== "audio" && !disableAnnotations;
   const hasTimecode = assetType === "video" || assetType === "audio";
 
+  // OSC 0013: the attached-timecode chip shows the clip's real source TC. A compare pane
+  // (playheadTimeOverride set) may be showing a version other than the current one, whose start
+  // TC isn't loaded, so it keeps counting from 0. The stored timecode_start stays seconds-from-0.
+  const sourceTimecode = useSourceTimecode();
+  const tcLabel = (s: number) =>
+    playheadTimeOverride != null ? formatTimecode(s) : sourceTimecode(s);
   function displayTime(seconds: number): string {
     switch (timeFormat) {
       case "frames":
@@ -301,9 +308,9 @@ export function CommentInput({
       case "standard":
         return formatTime(seconds);
       case "timecode":
-        return formatTimecode(seconds);
+        return tcLabel(seconds);
       default:
-        return formatTimecode(seconds);
+        return tcLabel(seconds);
     }
   }
   const hasAnnotation =
