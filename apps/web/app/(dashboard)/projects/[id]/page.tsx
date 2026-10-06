@@ -21,7 +21,7 @@ import {
   Users,
   Settings,
 } from "lucide-react";
-import { cn, formatRelativeTime, formatBytes } from "@/lib/utils";
+import { cn, formatRelativeTime, formatBytes, versionLabel } from "@/lib/utils";
 import { api, ApiError } from "@/lib/api";
 import { withBasePath } from "@/lib/base-path";
 import { Button } from "@/components/ui/button";
@@ -238,6 +238,16 @@ export default function ProjectDetailPage() {
     const map: Record<string, number> = {};
     for (const a of assets) {
       if (a.latest_version) map[a.id] = a.latest_version.version_number;
+    }
+    return map;
+  }, [assets]);
+
+  // OSC 0015: the label shown (our vN from the file name), separate from the count above.
+  const versionLabels = React.useMemo(() => {
+    if (!assets) return {};
+    const map: Record<string, string> = {};
+    for (const a of assets) {
+      if (a.latest_version) map[a.id] = versionLabel(a.latest_version);
     }
     return map;
   }, [assets]);
@@ -819,6 +829,7 @@ export default function ProjectDetailPage() {
               assignees={assigneesMap}
               thumbnails={thumbnails}
               versionCounts={versionCounts}
+              versionLabels={versionLabels}
               authorNames={authorNames}
               fileSizes={fileSizes}
               selectedAssetId={selectedAsset?.id}
@@ -1187,7 +1198,7 @@ export default function ProjectDetailPage() {
                             Version
                           </span>
                           <span className="text-xs text-text-primary">
-                            v{selectedAsset.latest_version.version_number}
+                            {versionLabel(selectedAsset.latest_version)}
                           </span>
                         </div>
                       )}
