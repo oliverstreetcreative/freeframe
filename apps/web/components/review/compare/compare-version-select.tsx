@@ -2,7 +2,7 @@
 
 import * as React from 'react'
 import { ChevronDown } from 'lucide-react'
-import { cn } from '@/lib/utils'
+import { cn, versionLabel } from '@/lib/utils'
 import { versionStatusConfig } from '@/components/review/version-switcher'
 import type { AssetVersion } from '@/types'
 
@@ -88,7 +88,7 @@ export function CompareVersionSelect({ versions, value, onChange, accentClass, e
                   blocked && 'opacity-50 cursor-not-allowed',
                 )}
               >
-                <span>v{v.version_number}</span>
+                <span>{versionLabel(v)}</span>
                 {onOtherSide ? (
                   <span className="text-[11px] text-text-tertiary">in use</span>
                 ) : status && !ready ? (

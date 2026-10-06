@@ -39,7 +39,7 @@ import {
   GitCompareArrows,
 } from 'lucide-react'
 import Link from 'next/link'
-import { cn } from '@/lib/utils'
+import { cn, versionLabel } from '@/lib/utils'
 import { PoweredByBadge } from '@/components/shared/powered-by-badge'
 import { usePageTitle } from '@/hooks/use-page-title'
 import { useSourceTimecode } from '@/hooks/use-source-timecode'
@@ -499,7 +499,7 @@ function ReviewScreenInner({ projectId }: { projectId: string }) {
         {currentVersion && (
           <div className="flex items-center justify-between">
             <span className="text-xs text-text-tertiary">Version</span>
-            <span className="text-xs text-text-primary">v{currentVersion.version_number}</span>
+            <span className="text-xs text-text-primary">{versionLabel(currentVersion)}</span>
           </div>
         )}
         {currentVersion && (

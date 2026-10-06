@@ -3,7 +3,7 @@
 import * as React from 'react'
 import * as DropdownMenu from '@radix-ui/react-dropdown-menu'
 import { AlertCircle, Loader2, CheckCircle2, ChevronDown } from 'lucide-react'
-import { cn } from '@/lib/utils'
+import { cn, versionLabel } from '@/lib/utils'
 import { useReviewStore } from '@/stores/review-store'
 import type { AssetVersion, AssetVersionStatus } from '@/types'
 
@@ -64,12 +64,12 @@ export function VersionSwitcher({ versions, className }: VersionSwitcherProps) {
       <DropdownMenu.Root>
         <DropdownMenu.Trigger asChild>
           <button className="inline-flex items-center gap-1.5 rounded-md px-2.5 py-1 bg-accent text-white text-xs font-medium hover:bg-accent/90 transition-colors outline-none">
-            <span>v{currentVersion?.version_number ?? latest.version_number}</span>
+            <span>{versionLabel(currentVersion ?? latest)}</span>
             {inFlightCfg && (
               <span
                 data-testid="version-status-indicator"
                 className="inline-flex items-center gap-1 text-[11px] text-white/90"
-                title={`v${latest.version_number} — ${inFlightCfg.label}`}
+                title={`${versionLabel(latest)} — ${inFlightCfg.label}`}
               >
                 {inFlightCfg.icon}
                 {inFlightCfg.label}
@@ -87,6 +87,10 @@ export function VersionSwitcher({ versions, className }: VersionSwitcherProps) {
             >
               {sorted.map((version) => {
                 const isActive = currentVersion?.id === version.id
+                // OSC 0015: an older upload that carries the same vN as a newer one says so,
+                // rather than showing two identical labels.
+                const label = versionLabel(version)
+                const earlier = sorted.some((o) => o.version_number > version.version_number && versionLabel(o) === label)
                 const statusCfg = versionStatusConfig[version.processing_status]
                 const isDisabled =
                   version.processing_status === 'uploading' ||
@@ -104,7 +108,7 @@ export function VersionSwitcher({ versions, className }: VersionSwitcherProps) {
                       isDisabled && 'opacity-50 cursor-not-allowed',
                     )}
                   >
-                    <span>v{version.version_number}</span>
+                    <span>{label}{earlier ? ' · earlier upload' : ''}</span>
                     <span
                       className={cn('inline-flex items-center gap-1 text-[11px]', statusCfg.className)}
                       title={statusCfg.label}

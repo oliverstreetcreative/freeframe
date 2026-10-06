@@ -241,3 +241,13 @@ export function uploadNameForFile(
   if (fileCount === 1) return typedName.trim() || assetNameFromFile(fileName)
   return assetNameFromFile(fileName)
 }
+
+/**
+ * OSC 0015: the version label a person sees. OSC numbers versions by review round, and the render's
+ * file name + slate carry that number, so the API sends it as `osc_label` ("v10"). Falls back to the
+ * upload count when the file carries no vN. Sam 10/5: "Sam must never translate."
+ */
+export function versionLabel(v: { version_number: number; osc_label?: string | null } | null | undefined): string {
+  if (!v) return ''
+  return v.osc_label || `v${v.version_number}`
+}

@@ -139,6 +139,8 @@ export interface AssetVersion {
   /** When the upload last moved; see `mergeHistoryAssets`. */
   last_activity_at?: string | null;
   files?: MediaFile[];
+  /** OSC 0015: our vN from the uploaded file name (slate/filename); shown instead of the upload count. */
+  osc_label?: string | null;
 }
 
 /** Backend returns AssetResponse with latest_version embedded */

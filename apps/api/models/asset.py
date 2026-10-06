@@ -80,6 +80,22 @@ class AssetVersion(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     deleted_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
 
+    @property
+    def osc_label(self) -> Optional[str]:
+        """OSC 0015: our vN, read from the uploaded file name (see services/osc_version_label)."""
+        from sqlalchemy.orm import object_session
+        from ..services.osc_version_label import version_label
+        s = object_session(self)
+        if s is None:
+            return None
+        try:
+            name = (s.query(MediaFile.original_filename)
+                    .filter(MediaFile.version_id == self.id)
+                    .order_by(MediaFile.created_at.asc()).limit(1).scalar())
+        except Exception:
+            return None
+        return version_label(name)
+
 class FileType(str, PyEnum):
     image = "image"
     audio = "audio"

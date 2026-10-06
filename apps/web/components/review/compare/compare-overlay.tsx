@@ -3,7 +3,7 @@
 import * as React from 'react'
 import { usePathname, useRouter, useSearchParams } from 'next/navigation'
 import { Columns2, FlipHorizontal2, MessageSquare, Volume2, VolumeX, X } from 'lucide-react'
-import { cn } from '@/lib/utils'
+import { cn, versionLabel } from '@/lib/utils'
 import { useReviewStore } from '@/stores/review-store'
 import { useAuthStore } from '@/stores/auth-store'
 import { useComments } from '@/hooks/use-comments'
@@ -343,8 +343,8 @@ export function CompareOverlay({ asset, versions, rightVersion, onClose, canComm
 
   if (!left) return null
 
-  const badgeA = `v${left.version_number}`
-  const badgeB = `v${right.version_number}`
+  const badgeA = versionLabel(left)
+  const badgeB = versionLabel(right)
 
   return (
     <div className="fixed inset-0 z-50 flex flex-col bg-bg-primary">

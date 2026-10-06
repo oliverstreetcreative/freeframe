@@ -186,6 +186,7 @@ export function ReviewProvider({
             id: v.id,
             asset_id: assetId,
             version_number: v.version_number,
+            osc_label: v.osc_label ?? null, // OSC 0015
             processing_status: v.processing_status,
             created_by: "",
             created_at: v.created_at,

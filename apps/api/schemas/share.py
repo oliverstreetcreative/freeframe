@@ -1,4 +1,4 @@
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 import uuid
 from datetime import datetime
 from typing import Optional, Literal
@@ -182,7 +182,13 @@ class ShareAssetVersionItem(BaseModel):
     version_number: int
     processing_status: str
     created_at: datetime
+    osc_label: Optional[str] = None  # OSC 0015: our vN from the file name
     model_config = {"from_attributes": True}
+
+    @field_validator("osc_label", mode="before")
+    @classmethod
+    def _osc_label_str(cls, v):
+        return v if isinstance(v, str) else None
 
 
 class DirectShareCreate(BaseModel):
