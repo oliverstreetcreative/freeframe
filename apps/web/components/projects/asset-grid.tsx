@@ -38,6 +38,8 @@ interface AssetGridProps {
   assignees?: Record<string, User>
   thumbnails?: Record<string, string>
   versionCounts?: Record<string, number>
+  /** OSC 0015: our vN per asset (from the file name); falls back to the count. */
+  versionLabels?: Record<string, string>
   authorNames?: Record<string, string>
   fileSizes?: Record<string, number>
   selectedAssetId?: string | null
@@ -96,6 +98,7 @@ export function AssetGrid({
   assignees = {},
   thumbnails = {},
   versionCounts = {},
+  versionLabels = {},
   authorNames = {},
   fileSizes = {},
   selectedAssetId,
@@ -576,7 +579,7 @@ export function AssetGrid({
                 )}
                 {/* Version */}
                 <div className="hidden md:block w-10 text-center text-xs text-text-tertiary tabular-nums shrink-0">
-                  {versionCount ? `v${versionCount}` : 'v1'}
+                  {versionLabels[asset.id] || (versionCount ? `v${versionCount}` : 'v1')}
                 </div>
                 {/* Date */}
                 <div className="hidden sm:block w-28 text-xs text-text-tertiary shrink-0">
