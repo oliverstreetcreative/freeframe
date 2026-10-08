@@ -27,6 +27,7 @@ import { useReviewStore } from '@/stores/review-store'
 import { fetchDownloadUrl, handleDownload, triggerDownload } from './share-download'
 import { ShareReviewScreen } from './share-review-screen'
 import { useBranding } from '@/components/shared/branding-provider'
+import { ShareKindBadge } from './share-kind-badge' // OSC 0020
 import type {
   SharePermission,
   ShareLinkAppearance,
@@ -926,7 +927,10 @@ export function FolderShareViewer({
         <div className="flex-1 flex flex-col overflow-hidden">
           {/* Sub-header: title, summary, breadcrumb, search */}
           <div className="border-b border-border px-5 py-4">
-            <h1 className="text-lg font-bold text-text-primary leading-tight">{title || folderName}</h1>
+            <div className="flex items-center gap-2 min-w-0">
+              <h1 className="text-lg font-bold text-text-primary leading-tight truncate">{title || folderName}</h1>
+              <ShareKindBadge token={token} shareSession={shareSession} />
+            </div>
             {/* OSC 0019: the link's description is FOR the client: shown here as plain text
                 (React text, line breaks kept), hidden when empty. */}
             {description?.trim() && (
