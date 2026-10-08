@@ -977,6 +977,16 @@ def list_share_comments(
     validate_asset_in_share(db, link, asset)
     asset_id = asset.id
 
+    # OSC 0017 (Sam 10/8: a delivery link is "no comments, download only"): a view-only link is a
+    # delivery, so it shows no comments at all, ours or anyone's.
+    if link.permission == SharePermission.view:
+        return []
+    # A link that hides version history serves only the latest ready version, so its comments are that
+    # version's only. Without this, omitting version_id returned every version's public notes.
+    if not getattr(link, "show_versions", True):
+        version_id = None
+        latest_only = True
+
     # The folder/grid preview has no version switcher, so it scopes to the latest ready version.
     if latest_only and not version_id:
         from ..models.asset import AssetVersion, ProcessingStatus
