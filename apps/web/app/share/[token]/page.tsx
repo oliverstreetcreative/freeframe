@@ -264,6 +264,8 @@ export default function SharePage({
         showVersions: boolean
         appearance: ShareLinkAppearance | null
         branding: ShareBranding | null
+        title: string | null // OSC 0019: the link's PUBLIC title
+        description: string | null // OSC 0019: shown to the client on the page
       }
     | {
         stage: 'folder_ready'
@@ -367,6 +369,8 @@ export default function SharePage({
         showVersions: data.show_versions ?? true,
         appearance: data.appearance ?? null,
         branding: data.branding ?? null,
+        title: data.title ?? null,
+        description: data.description ?? null,
       })
     } catch {
       setState({ stage: 'invalid' })
@@ -459,6 +463,8 @@ export default function SharePage({
       appearance={state.appearance}
       branding={state.branding}
       shareSession={shareSession}
+      title={state.title}
+      description={state.description}
     />
   )
 }
@@ -477,7 +483,7 @@ export default function SharePage({
  * not: the review screen is all player and comments, with no footer region.
  */
 function SingleAssetShareViewer({
-  token, asset, permission, allowDownload, showVersions, appearance, branding, shareSession,
+  token, asset, permission, allowDownload, showVersions, appearance, branding, shareSession, title, description,
 }: {
   token: string
   asset: { id: string; name: string }
@@ -487,6 +493,8 @@ function SingleAssetShareViewer({
   appearance?: ShareLinkAppearance | null
   branding?: ShareBranding | null
   shareSession?: string | null
+  title?: string | null // OSC 0019
+  description?: string | null // OSC 0019
 }) {
   // Same resolution the folder grid uses: the link's own accent wins over the
   // project's, which wins over the built-in. No fallback, so a link with no
@@ -507,6 +515,8 @@ function SingleAssetShareViewer({
         showVersions={showVersions}
         theme={isDark ? 'dark' : 'light'}
         projectLogoUrl={branding?.logo_url ?? null}
+        linkTitle={title}
+        linkDescription={description}
       />
     </div>
   )
