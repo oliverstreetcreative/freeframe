@@ -927,6 +927,13 @@ export function FolderShareViewer({
           {/* Sub-header: title, summary, breadcrumb, search */}
           <div className="border-b border-border px-5 py-4">
             <h1 className="text-lg font-bold text-text-primary leading-tight">{title || folderName}</h1>
+            {/* OSC 0019: the link's description is FOR the client: shown here as plain text
+                (React text, line breaks kept), hidden when empty. */}
+            {description?.trim() && (
+              <p className="mt-1 max-w-prose text-sm text-text-secondary whitespace-pre-line break-words">
+                {description.trim()}
+              </p>
+            )}
             {!loading && (
               <p className="mt-0.5 text-sm text-text-tertiary">
                 {createdByName && <>Created by {createdByName} &middot; </>}
