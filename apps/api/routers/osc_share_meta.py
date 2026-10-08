@@ -212,3 +212,14 @@ def put_share_meta(link_id: uuid.UUID, body: MetaIn, db: Session = Depends(get_d
     db.commit()
     return {"kind": kind, "internal_label": label, "permission": _perm(link.permission),
             "allow_download": bool(link.allow_download), "show_versions": bool(link.show_versions)}
+
+
+# OSC 0020 (Sam 10/8 19:05: "It should be clear which type is which"): the RECIPIENT's page shows the
+# link's kind too. Public and minimal: only the kind, only for a link the caller may open (same session /
+# password check as every other public share endpoint). The internal label never leaves the staff API.
+@router.get("/share/{token}/osc-kind")
+def public_share_kind(token: str, share_session: Optional[str] = None, db: Session = Depends(get_db)):
+    from ..services.permissions import validate_share_link_with_session
+    link = validate_share_link_with_session(db, token, share_session=share_session, current_user=None)
+    row = _meta_rows(db, [link.id]).get(str(link.id))
+    return {"kind": row[0] if row else infer_kind(link.permission, link.allow_download)}

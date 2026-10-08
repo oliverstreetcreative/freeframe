@@ -21,6 +21,7 @@ import { useMediaTransport } from '@/hooks/use-media-transport'
 import { useSourceTimecode } from '@/hooks/use-source-timecode'
 import type { SharePermission } from '@/types'
 import { handleDownload } from './share-download'
+import { ShareKindBadge } from './share-kind-badge' // OSC 0020
 
 /** Signed in, or a guest who has already given a name and email. */
 function hasIdentity(): boolean {
@@ -298,6 +299,7 @@ function ShareReviewInner({
             </button>
           )}
           <span className="text-[13px] font-medium text-text-primary truncate" title={publicTitle}>{publicTitle}</span>
+          <ShareKindBadge token={token} shareSession={shareSession} />
           {publicTitle !== assetName && (
             <span className="hidden md:inline text-[12px] text-text-tertiary truncate">&middot; {assetName}</span>
           )}
