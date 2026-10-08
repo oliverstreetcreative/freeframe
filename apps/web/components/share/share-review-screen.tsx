@@ -23,6 +23,7 @@ import type { SharePermission } from '@/types'
 import { fetchShareDownloadOptions, handleDownload } from './share-download'
 import { DownloadMenu } from '@/components/shared/download-menu'
 import { ShareBrandMark } from './share-brand-mark'
+import { ShareKindBadge } from './share-kind-badge' // OSC 0020
 
 /** Signed in, or a guest who has already given a name and email. */
 function hasIdentity(): boolean {
@@ -318,6 +319,7 @@ function ShareReviewInner({
           {/* The name gives way last: the logo shrinks first (ShareBrandMark),
               and Download is icon-only on a phone. OSC 0019: the link's public title replaces it. */}
           <span className="text-[13px] font-medium text-text-primary truncate min-w-[4rem]" title={publicTitle}>{publicTitle}</span>
+          <ShareKindBadge token={token} shareSession={shareSession} />
           {publicTitle !== assetName && (
             <span className="hidden md:inline text-[12px] text-text-tertiary truncate">&middot; {assetName}</span>
           )}
