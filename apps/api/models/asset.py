@@ -88,6 +88,15 @@ class AssetVersion(Base):
         s = object_session(self)
         if s is None:
             return None
+        try:  # OSC 0016: a label set when this version was merged in from another item wins
+            from sqlalchemy import text as _text
+            with s.begin_nested():  # a savepoint, so a failure here can't poison the request's txn
+                override = s.execute(_text("SELECT label FROM osc_version_labels WHERE version_id = :v"),
+                                     {"v": str(self.id)}).scalar()
+            if override:
+                return override
+        except Exception:
+            pass
         try:
             name = (s.query(MediaFile.original_filename)
                     .filter(MediaFile.version_id == self.id)
