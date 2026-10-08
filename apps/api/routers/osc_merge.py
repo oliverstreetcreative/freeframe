@@ -48,6 +48,10 @@ class MergeIn(BaseModel):
     dry_run: bool = True
     # Token prefixes of links checked by hand (e.g. an internal reviewer link) that may see the change.
     override_links: list[str] = []
+    # OSC 0018 (Sam 10/8 19:05: no separate delivery items): a source served by client links may be merged
+    # if those links are REPOINTED to the target and the target's top version is byte-identical to the file
+    # they served (the master ends on top of the deliverable's stack).
+    repoint_links: bool = False
 
 
 def plan_order(rows):
@@ -82,7 +86,7 @@ def merge(body: MergeIn, db: Session = Depends(get_db), current_user: User = Dep
         raise HTTPException(404, "Target item not found")
     if not body.sources:
         raise HTTPException(400, "No sources")
-    sources = []
+    sources, repointed = [], []
     for s in body.sources:
         a = db.query(Asset).filter(Asset.id == s.asset_id, Asset.deleted_at.is_(None)).first()
         if not a:
@@ -91,11 +95,26 @@ def merge(body: MergeIn, db: Session = Depends(get_db), current_user: User = Dep
             raise HTTPException(400, "A source can't be the target")
         if a.project_id != target.project_id:
             raise HTTPException(400, f"Source {a.name!r} is in another project")
+        # A FOLDER link serves whatever is in its folder and can't be repointed; merging moves the source
+        # to _archive, which would empty that link (10/8: TWwa + i0CNF went blank this way). Refuse unless
+        # the target already sits in the same folder (then the link keeps serving the stack).
+        if a.folder_id and a.folder_id != target.folder_id:
+            folder_links = db.execute(text("""
+                SELECT DISTINCT sl.token, sl.title FROM share_links sl
+                LEFT JOIN share_link_items sli ON sli.share_link_id = sl.id
+                WHERE sl.is_enabled AND sl.deleted_at IS NULL AND (sl.folder_id = :f OR sli.folder_id = :f)"""),
+                {"f": str(a.folder_id)}).fetchall()
+            if folder_links:
+                raise HTTPException(409, f"Source {a.name!r} is served through FOLDER link(s) "
+                                         f"{[f'{t} ({k[:8]})' for k, t in folder_links]}; move the target into that "
+                                         "folder first, or the link would go empty")
         served = _enabled_links_serving(db, a, body.override_links)
-        if served:
+        if served and not body.repoint_links:
             raise HTTPException(409, f"Source {a.name!r} is served by enabled share link(s) {served}; "
                                      "a client link must keep showing what the client got")
         sources.append((a, s.label))
+        if served:
+            repointed.append((a, served))
 
     rank = {a.id: i for i, (a, _) in enumerate(sources)}
     versions = db.query(AssetVersion).filter(
@@ -108,9 +127,25 @@ def merge(body: MergeIn, db: Session = Depends(get_db), current_user: User = Dep
     plan = [{"version_id": str(vid), "from": name_of[by_id[vid].asset_id], "old": by_id[vid].version_number,
              "new": n, "created_at": by_id[vid].created_at.isoformat() if by_id[vid].created_at else None}
             for vid, n in order]
+    # Repointed links must keep serving the identical file: the stack's new top must be byte-identical to
+    # the latest version each repointed source served (same size + same original file name).
+    if repointed and order:
+        def _file(vid):
+            return db.execute(text("SELECT file_size_bytes, original_filename FROM media_files WHERE version_id = :v "
+                                   "ORDER BY created_at LIMIT 1"), {"v": str(vid)}).first()
+        top_file = _file(order[-1][0])
+        for a, served in repointed:
+            mine = [v for v in versions if v.asset_id == a.id]
+            src_top = max(mine, key=lambda v: v.version_number, default=None)
+            if src_top is None or top_file is None or tuple(_file(src_top.id) or ()) != tuple(top_file):
+                raise HTTPException(409, f"Links {served} on {a.name!r} would serve a different file after the "
+                                         "merge (the new top version isn't the file they served)")
+        repoint_ok = {t for _, served in repointed for t in served}
+    else:
+        repoint_ok = set()
     # A target that a client link serves must keep the same version on top (links without "show all
     # versions" serve the latest), so a merge may only add OLDER versions underneath it.
-    target_links = _enabled_links_serving(db, target, body.override_links)
+    target_links = [t for t in _enabled_links_serving(db, target, body.override_links) if t not in repoint_ok]
     if target_links and order:
         cur_top = max((v for v in versions if v.asset_id == target.id), key=lambda v: v.version_number, default=None)
         if cur_top is None or order[-1][0] != cur_top.id:
@@ -133,6 +168,13 @@ def merge(body: MergeIn, db: Session = Depends(get_db), current_user: User = Dep
     for table in ("comments", "osc_guest_approvals", "notifications"):
         db.execute(text(f"UPDATE {table} SET asset_id = :t WHERE asset_id = ANY(CAST(:s AS uuid[]))"), params)
     db.execute(text("UPDATE activity_logs SET asset_id = :t WHERE asset_id = ANY(CAST(:s AS uuid[]))"), params)
+    if repointed:  # OSC 0018: the client links now serve the target (checked above: same file on top)
+        db.execute(text("UPDATE share_links SET asset_id = :t WHERE asset_id = ANY(CAST(:s AS uuid[]))"), params)
+        db.execute(text("""DELETE FROM share_link_items x WHERE x.asset_id = ANY(CAST(:s AS uuid[]))
+                           AND EXISTS (SELECT 1 FROM share_link_items y WHERE y.share_link_id = x.share_link_id
+                                       AND y.asset_id = :t)"""), params)
+        db.execute(text("UPDATE share_link_items SET asset_id = :t WHERE asset_id = ANY(CAST(:s AS uuid[]))"), params)
+        db.execute(text("UPDATE asset_shares SET asset_id = :t WHERE asset_id = ANY(CAST(:s AS uuid[]))"), params)
     for a, label in sources:
         if not label:
             continue

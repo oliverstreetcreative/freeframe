@@ -38,7 +38,8 @@ def test_a_share_download_serves_the_uploaded_master(client, monkeypatch):
     r, presign, log = _call(client, monkeypatch)
     assert r.status_code == 200, r.text
     assert presign.call_args_list[0][0][0] == "raw/p/a/v/master.mov"
-    assert presign.call_args_list[0].kwargs["download_filename"] == "Spot 1 — Final.mov"
+    # 0018: named after the master's own file name, not the item (items are named for the deliverable)
+    assert presign.call_args_list[0].kwargs["download_filename"] == "01_SPOT_SP_v3_master.mov"
 
 
 def test_the_download_is_logged_as_a_download(client, monkeypatch):
