@@ -12,7 +12,7 @@
  */
 import * as React from 'react'
 import { ShareDecision } from '@/components/osc/share-decision'
-import { ArrowLeft, Download, Loader2, PanelRightClose, PanelRightOpen } from 'lucide-react'
+import { ArrowLeft, Download, Loader2, PanelRightClose, PanelRightOpen, X } from 'lucide-react'
 import { useReview, type CreateCommentPayload } from '@/components/review/review-provider'
 import { useReviewStore } from '@/stores/review-store'
 import { MobileCommentSheet, PEEK_PX, type SheetState } from '@/components/review/mobile-comment-sheet'
@@ -32,9 +32,11 @@ function hasIdentity(): boolean {
 }
 
 export function ShareReviewScreen({
-  token, shareSession, assetId, assetName, permission, allowDownload, showVersions, onBack,
+  token, shareSession, assetId, assetName, permission, allowDownload, showVersions, onBack, linkTitle, linkDescription,
 }: {
   token: string; shareSession?: string | null; assetId: string; assetName: string; permission: SharePermission; allowDownload: boolean; showVersions: boolean; onBack?: () => void
+  /** OSC 0019: the link's PUBLIC title and description (single-asset links; the folder grid shows its own). */
+  linkTitle?: string | null; linkDescription?: string | null
 }) {
   const [ReviewProvider, setProvider] = React.useState<any>(null)
   const [VideoPlayer, setVideoPlayer] = React.useState<any>(null)
@@ -81,6 +83,8 @@ export function ShareReviewScreen({
         allowDownload={allowDownload}
         showVersions={showVersions}
         onBack={onBack}
+        linkTitle={linkTitle}
+        linkDescription={linkDescription}
         VideoPlayer={VideoPlayer}
         ImageViewer={ImageViewer}
         AudioPlayer={AudioPlayer}
@@ -93,7 +97,7 @@ export function ShareReviewScreen({
 }
 
 function ShareReviewInner({
-  token, shareSession, assetName, permission, allowDownload, showVersions, onBack,
+  token, shareSession, assetName, permission, allowDownload, showVersions, onBack, linkTitle, linkDescription,
   VideoPlayer, ImageViewer, AudioPlayer, CommentPanel, CommentInput, VersionSwitcher,
 }: any) {
   const { asset, versions, isLoading, comments, refetchComments, addComment } = useReview()
@@ -111,6 +115,12 @@ function ShareReviewInner({
   const { isPlaying, togglePlay } = useMediaTransport()
   const reviewRootRef = React.useRef<HTMLDivElement>(null)
   const handleSheetHeight = React.useCallback((px: number) => setSheetHeight(px), [])
+  // OSC 0019: the link's public title replaces the file name up top; its description is a
+  // dismissible line under the top bar (plain React text, line breaks kept).
+  const publicTitle = (typeof linkTitle === 'string' && linkTitle.trim()) || assetName
+  const descriptionText = typeof linkDescription === 'string' ? linkDescription.trim() : ''
+  const [descriptionDismissed, setDescriptionDismissed] = React.useState(false)
+  const showDescription = !!descriptionText && !descriptionDismissed
 
   // Drawing collapses the sheet to `compose`, which drops the comment list and
   // leaves only the composer and the drawing toolbar. Someone marking up a
@@ -141,7 +151,7 @@ function ShareReviewInner({
     }
     const available = root.clientHeight - sheetHeight - 60
     root.style.setProperty('--ff-stage-max', `${Math.max(80, available)}px`)
-  }, [useSheet, sheetHeight])
+  }, [useSheet, sheetHeight, showDescription]) // OSC 0019: the description line changes the root's height
 
   const [activeTab, setActiveTab] = React.useState<'comments' | 'fields'>('comments')
   const [AnnotationOverlay, setAnnotationOverlay] = React.useState<any>(null)
@@ -287,7 +297,10 @@ function ShareReviewInner({
               <ArrowLeft className="h-4 w-4" />
             </button>
           )}
-          <span className="text-[13px] font-medium text-text-primary truncate">{assetName}</span>
+          <span className="text-[13px] font-medium text-text-primary truncate" title={publicTitle}>{publicTitle}</span>
+          {publicTitle !== assetName && (
+            <span className="hidden md:inline text-[12px] text-text-tertiary truncate">&middot; {assetName}</span>
+          )}
         </div>
         <div className="flex items-center gap-2">
           {showVersions && VersionSwitcher && versions.length > 0 && (
@@ -306,6 +319,23 @@ function ShareReviewInner({
           </button>
         </div>
       </div>
+
+      {/* OSC 0019: the link's description, for the client. */}
+      {showDescription && (
+        <div className="flex items-start gap-2 border-b border-border bg-bg-secondary px-3 py-2 shrink-0">
+          <p className="flex-1 min-w-0 max-h-24 overflow-y-auto text-xs text-text-secondary whitespace-pre-line break-words">
+            {descriptionText}
+          </p>
+          <button
+            onClick={() => setDescriptionDismissed(true)}
+            className="flex items-center justify-center h-5 w-5 rounded text-text-tertiary hover:text-text-primary hover:bg-bg-hover transition-colors shrink-0"
+            title="Hide"
+            aria-label="Hide description"
+          >
+            <X className="h-3 w-3" />
+          </button>
+        </div>
+      )}
 
       {/* Main: viewer + sidebar */}
       {/* pb-14 reserves the sheet's peek band so the player's own transport

@@ -28,6 +28,18 @@ import { cn } from "@/lib/utils";
 import { withBasePath } from "@/lib/base-path";
 import { api } from "@/lib/api";
 import { ShareLinkActivityPanel } from "@/components/projects/share-link-activity";
+import {
+  KindToggle,
+  SlateGuardNotice,
+} from "@/components/projects/share-kind-controls";
+import {
+  KIND_HINT,
+  inferKind,
+  putShareMeta,
+  useShareMeta,
+  type ShareKind,
+  type ShareMetaPutBody,
+} from "@/hooks/use-share-meta";
 import type { ShareLink, ShareLinkAppearance } from "@/types";
 
 // ─── Shared hook for share link data + mutations ────────────────────────────
@@ -564,10 +576,52 @@ export function ShareLinkContent({
   frontendUrl,
   onUpdate,
 }: ShareLinkContentProps) {
-  const { shareLink, immediateUpdate } = useShareLinkData(token);
+  const { shareLink, immediateUpdate, mutate } = useShareLinkData(token);
 
   const [localTitle, setLocalTitle] = React.useState("");
   const [localDescription, setLocalDescription] = React.useState("");
+
+  // OSC 0019: the link's KIND (review / delivery) and its staff-only INTERNAL LABEL.
+  const { shareMeta, mutateShareMeta } = useShareMeta(projectId);
+  const meta = shareLink ? shareMeta[shareLink.id] : undefined;
+  const currentKind: ShareKind =
+    meta?.kind ?? (shareLink ? inferKind(shareLink) : "review");
+  const [localLabel, setLocalLabel] = React.useState("");
+  const [metaBusy, setMetaBusy] = React.useState(false);
+  const [metaError, setMetaError] = React.useState<string | null>(null);
+  const [slateBlock, setSlateBlock] = React.useState<{
+    detail: string;
+    slated: string[];
+  } | null>(null);
+
+  React.useEffect(() => {
+    setLocalLabel(meta?.internal_label ?? "");
+  }, [meta?.internal_label]);
+
+  const saveMeta = React.useCallback(
+    async (body: ShareMetaPutBody) => {
+      if (!shareLink) return;
+      setMetaBusy(true);
+      setMetaError(null);
+      try {
+        const out = await putShareMeta(shareLink.id, body);
+        if (out.ok) {
+          setSlateBlock(null);
+          // The preset moved permission / download / versions: refresh the
+          // settings panel (same SWR key) and the link list too.
+          await Promise.all([mutateShareMeta(), mutate()]);
+          onUpdate?.();
+        } else if (out.status === 409) {
+          setSlateBlock({ detail: out.detail, slated: out.slated });
+        } else {
+          setMetaError(out.detail);
+        }
+      } finally {
+        setMetaBusy(false);
+      }
+    },
+    [shareLink, mutateShareMeta, mutate, onUpdate],
+  );
   const [previewThumbnails, setPreviewThumbnails] = React.useState<
     {
       id: string;
@@ -665,33 +719,90 @@ export function ShareLinkContent({
           All Share Links
         </button>
 
-        {/* Editable title */}
-        <input
-          type="text"
-          value={localTitle}
-          onChange={(e) => setLocalTitle(e.target.value)}
-          onBlur={() => {
-            if (localTitle !== shareLink.title) {
-              immediateUpdate({ title: localTitle }).then(() => onUpdate?.());
-            }
-          }}
-          placeholder="Untitled Share Link"
-          className="w-full bg-transparent text-2xl font-semibold text-text-primary placeholder:text-text-tertiary outline-none border-none focus:ring-0"
-        />
+        {/* OSC 0019: kind + internal label (staff only) */}
+        <div className="rounded-lg border border-border bg-bg-tertiary/40 p-4 space-y-3">
+          <div className="flex items-center justify-between gap-3">
+            <div className="min-w-0">
+              <p className="text-sm text-text-primary">Kind</p>
+              <p className="text-xs text-text-tertiary mt-0.5">
+                {KIND_HINT[currentKind]}
+              </p>
+            </div>
+            <KindToggle
+              value={currentKind}
+              disabled={metaBusy}
+              onChange={(kind) => saveMeta({ kind })}
+            />
+          </div>
+          {slateBlock && (
+            <SlateGuardNotice
+              detail={slateBlock.detail}
+              slated={slateBlock.slated}
+              busy={metaBusy}
+              onForce={() => saveMeta({ kind: "delivery", force: true })}
+              onCancel={() => setSlateBlock(null)}
+            />
+          )}
+          {metaError && (
+            <p className="text-xs text-status-error">{metaError}</p>
+          )}
+          <div className="space-y-1.5">
+            <label className="text-xs font-medium text-text-secondary">
+              Internal label (only OSC sees this)
+            </label>
+            <input
+              type="text"
+              value={localLabel}
+              maxLength={255}
+              onChange={(e) => setLocalLabel(e.target.value)}
+              onBlur={() => {
+                if (localLabel.trim() !== (meta?.internal_label ?? "")) {
+                  saveMeta({ internal_label: localLabel.trim() || null });
+                }
+              }}
+              placeholder="e.g. Brand film v3, for Jo's notes"
+              className="w-full rounded-md border border-border bg-bg-tertiary px-3 py-2 text-sm text-text-primary placeholder:text-text-tertiary outline-none focus:border-accent/50"
+            />
+          </div>
+        </div>
 
-        {/* Editable description */}
-        <textarea
-          value={localDescription}
-          onChange={(e) => setLocalDescription(e.target.value)}
-          onBlur={() => {
-            if (localDescription !== (shareLink.description || "")) {
-              immediateUpdate({ description: localDescription || null });
-            }
-          }}
-          placeholder="Add a description..."
-          rows={2}
-          className="w-full bg-transparent text-sm text-text-secondary placeholder:text-text-tertiary outline-none border-none resize-none focus:ring-0"
-        />
+        {/* Editable title (OSC 0019: this is the PUBLIC title) */}
+        <div className="space-y-1">
+          <label className="text-xs font-medium text-text-secondary">
+            Public title (the client sees this)
+          </label>
+          <input
+            type="text"
+            value={localTitle}
+            onChange={(e) => setLocalTitle(e.target.value)}
+            onBlur={() => {
+              if (localTitle !== shareLink.title) {
+                immediateUpdate({ title: localTitle }).then(() => onUpdate?.());
+              }
+            }}
+            placeholder="Untitled Share Link"
+            className="w-full bg-transparent text-2xl font-semibold text-text-primary placeholder:text-text-tertiary outline-none border-none focus:ring-0"
+          />
+        </div>
+
+        {/* Editable description (OSC 0019: shown to the client on the share page) */}
+        <div className="space-y-1">
+          <label className="text-xs font-medium text-text-secondary">
+            Description (shown on the share page)
+          </label>
+          <textarea
+            value={localDescription}
+            onChange={(e) => setLocalDescription(e.target.value)}
+            onBlur={() => {
+              if (localDescription !== (shareLink.description || "")) {
+                immediateUpdate({ description: localDescription || null });
+              }
+            }}
+            placeholder="Add a description..."
+            rows={2}
+            className="w-full bg-transparent text-sm text-text-secondary placeholder:text-text-tertiary outline-none border-none resize-none focus:ring-0"
+          />
+        </div>
 
         {/* Content preview — matches project view style */}
         {previewFolders.length > 0 || previewThumbnails.length > 0 ? (

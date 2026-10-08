@@ -682,6 +682,7 @@ export default function ProjectDetailPage() {
           {/* Asset grid, Share links, or Trash view */}
           {showShareLinks && !selectedShareLink ? (
             <ShareLinksTable
+              projectId={projectId}
               shareLinks={shareLinks}
               onSelectLink={(token) => setSelectedShareLink(token)}
               onToggleEnabled={(token, enabled) =>

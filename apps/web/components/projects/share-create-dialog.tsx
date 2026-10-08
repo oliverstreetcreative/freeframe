@@ -29,6 +29,8 @@ import { withBasePath } from '@/lib/base-path'
 import { Button } from '@/components/ui/button'
 import { api } from '@/lib/api'
 import type { AssetResponse, Folder, ShareLink, ShareLinkAppearance } from '@/types'
+import { KIND_HINT, putShareMeta, refreshShareMeta, type ShareKind } from '@/hooks/use-share-meta'
+import { KindToggle, SlateGuardNotice } from '@/components/projects/share-kind-controls'
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -262,6 +264,11 @@ function ShareInviteInput({ token, shareLink }: { token: string; shareLink: { as
 
 interface ShareConfig {
   title: string
+  // OSC 0019: kind (applied after create via PUT /osc/share-links/{id}/meta), staff-only label,
+  // and the description the client sees on the share page.
+  kind: ShareKind
+  internalLabel: string | null
+  description: string | null
   allowComments: boolean
   allowDownloads: boolean
   passphrase: string | null
@@ -292,10 +299,24 @@ function ConfigurePhase({ defaultTitle, onBack, onCreate, creating }: ConfigureP
   const [watermark, setWatermark] = React.useState(false)
   const [expiresAt, setExpiresAt] = React.useState('')
   const [visibility, setVisibility] = React.useState<'public' | 'secure'>('public')
+  // OSC 0019
+  const [kind, setKind] = React.useState<ShareKind>('review')
+  const [internalLabel, setInternalLabel] = React.useState('')
+  const [description, setDescription] = React.useState('')
+
+  function chooseKind(k: ShareKind) {
+    // Mirror the server's preset so the switches below show what the link will be.
+    setKind(k)
+    setAllowComments(k === 'review')
+    setAllowDownloads(k === 'delivery')
+  }
 
   function handleCreate() {
     onCreate({
       title: title.trim() || defaultTitle,
+      kind,
+      internalLabel: internalLabel.trim() || null,
+      description: description.trim() || null,
       allowComments,
       allowDownloads,
       passphrase: passphrase && passphraseValue ? passphraseValue : null,
@@ -324,14 +345,47 @@ function ConfigurePhase({ defaultTitle, onBack, onCreate, creating }: ConfigureP
 
       {/* Content */}
       <div className="px-5 py-4 space-y-4 max-h-[60vh] overflow-y-auto">
-        {/* Link name */}
+        {/* OSC 0019: kind */}
+        <div className="flex items-center justify-between gap-3">
+          <div className="min-w-0">
+            <p className="text-sm text-text-primary">Kind</p>
+            <p className="text-xs text-text-tertiary mt-0.5">{KIND_HINT[kind]}</p>
+          </div>
+          <KindToggle value={kind} onChange={chooseKind} disabled={creating} />
+        </div>
+
+        {/* OSC 0019: internal label */}
         <div className="space-y-1.5">
-          <label className="text-xs font-medium text-text-secondary">Link name</label>
+          <label className="text-xs font-medium text-text-secondary">Internal label (only OSC sees this)</label>
+          <input
+            value={internalLabel}
+            maxLength={255}
+            onChange={(e) => setInternalLabel(e.target.value)}
+            placeholder="e.g. Brand film v3, for Jo's notes"
+            className="flex h-9 w-full rounded-md border border-border bg-bg-secondary px-3 text-sm text-text-primary placeholder:text-text-tertiary focus:outline-none focus:border-accent"
+          />
+        </div>
+
+        {/* Link name (OSC 0019: the PUBLIC title) */}
+        <div className="space-y-1.5">
+          <label className="text-xs font-medium text-text-secondary">Public title (the client sees this)</label>
           <input
             value={title}
             onChange={(e) => setTitle(e.target.value)}
             placeholder={defaultTitle}
             className="flex h-9 w-full rounded-md border border-border bg-bg-secondary px-3 text-sm text-text-primary placeholder:text-text-tertiary focus:outline-none focus:border-accent"
+          />
+        </div>
+
+        {/* OSC 0019: description */}
+        <div className="space-y-1.5">
+          <label className="text-xs font-medium text-text-secondary">Description (shown on the share page)</label>
+          <textarea
+            value={description}
+            onChange={(e) => setDescription(e.target.value)}
+            rows={2}
+            placeholder="Optional"
+            className="w-full rounded-md border border-border bg-bg-secondary px-3 py-2 text-sm text-text-primary placeholder:text-text-tertiary focus:outline-none focus:border-accent resize-none"
           />
         </div>
 
@@ -989,6 +1043,16 @@ export function ShareCreateDialog({
   const [error, setError] = React.useState<string | null>(null)
   const [createdResult, setCreatedResult] = React.useState<CreatedShareResult | null>(null)
   const [allCreatedResults, setAllCreatedResults] = React.useState<CreatedShareResult[]>([])
+  // OSC 0019: the link exists but its kind didn't apply (409 = the slate guard). Holds the dialog
+  // open on a notice instead of the form, so Create can't be pressed twice into a duplicate link.
+  const [metaBlock, setMetaBlock] = React.useState<{
+    linkId: string
+    internalLabel: string | null
+    status: number
+    detail: string
+    slated: string[]
+  } | null>(null)
+  const [metaBusy, setMetaBusy] = React.useState(false)
 
   // Compute default title from a given items map (avoids stale state reads)
   function computeDefaultTitle(items: Map<string, SelectedItem>): string {
@@ -1050,6 +1114,7 @@ export function ShareCreateDialog({
       setPhase(initialResult ? 'result' : (preselectedItem || (preselectedItems && preselectedItems.length > 0)) ? 'configure' : 'selection')
       setCreating(false)
       setError(null)
+      setMetaBlock(null)
       setCreatedResult(initialResult ?? null)
       setAllCreatedResults(initialResult ? [initialResult] : [])
     }
@@ -1096,27 +1161,23 @@ export function ShareCreateDialog({
 
         const link = await api.post<ShareLink>(`/projects/${projectId}/share/multi`, body)
         shareLink = link
+        // OSC 0019: the multi-create body has no description field; set it on the new link.
+        if (config.description) await api.patch(`/share/${link.token}`, { description: config.description })
       } else {
         const singleItem = items.length === 1 ? items[0] : null
+        // OSC 0019: description rides on the create body (ShareLinkCreate accepts it).
+        const createBody = { title: config.title, description: config.description }
 
         if (singleItem?.type === 'asset') {
-          shareLink = await api.post<ShareLink>(`/assets/${singleItem.id}/share`, {
-            title: config.title,
-          })
+          shareLink = await api.post<ShareLink>(`/assets/${singleItem.id}/share`, createBody)
           itemType = 'asset'
           thumbUrl = singleItem.thumbnailUrl
         } else if (singleItem?.type === 'folder') {
-          shareLink = await api.post<ShareLink>(`/folders/${singleItem.id}/share`, {
-            title: config.title,
-          })
+          shareLink = await api.post<ShareLink>(`/folders/${singleItem.id}/share`, createBody)
         } else if (currentFolderId) {
-          shareLink = await api.post<ShareLink>(`/folders/${currentFolderId}/share`, {
-            title: config.title,
-          })
+          shareLink = await api.post<ShareLink>(`/folders/${currentFolderId}/share`, createBody)
         } else {
-          shareLink = await api.post<ShareLink>(`/projects/${projectId}/share`, {
-            title: config.title,
-          })
+          shareLink = await api.post<ShareLink>(`/projects/${projectId}/share`, createBody)
         }
 
         // Apply configured settings
@@ -1132,6 +1193,23 @@ export function ShareCreateDialog({
       }
 
       onShareCreated()
+
+      // OSC 0019: apply the kind's preset + the internal label. A 409 is the slate guard.
+      const out = await putShareMeta(shareLink.id, {
+        kind: config.kind,
+        internal_label: config.internalLabel,
+      })
+      refreshShareMeta(projectId)
+      if (!out.ok) {
+        setMetaBlock({
+          linkId: shareLink.id,
+          internalLabel: config.internalLabel,
+          status: out.status,
+          detail: out.detail,
+          slated: out.slated,
+        })
+        return
+      }
       onOpenChange(false)
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to create share link')
@@ -1142,6 +1220,29 @@ export function ShareCreateDialog({
 
   function handleDone() {
     onOpenChange(false)
+  }
+
+  // OSC 0019: settle a link whose kind didn't apply on create.
+  async function resolveMetaBlock(kind: ShareKind, force: boolean) {
+    if (!metaBlock) return
+    setMetaBusy(true)
+    try {
+      const out = await putShareMeta(metaBlock.linkId, {
+        kind,
+        internal_label: metaBlock.internalLabel,
+        force,
+      })
+      refreshShareMeta(projectId)
+      onShareCreated()
+      if (out.ok) {
+        setMetaBlock(null)
+        onOpenChange(false)
+      } else {
+        setMetaBlock({ ...metaBlock, status: out.status, detail: out.detail, slated: out.slated })
+      }
+    } finally {
+      setMetaBusy(false)
+    }
   }
 
   return (
@@ -1168,7 +1269,42 @@ export function ShareCreateDialog({
             </div>
           )}
 
-          {phase === 'result' && createdResult ? (
+          {metaBlock ? (
+            <>
+              <div className="flex items-center justify-between border-b border-border px-5 py-4">
+                <Dialog.Title className="text-sm font-semibold text-text-primary truncate">
+                  Link created
+                </Dialog.Title>
+                <Dialog.Close className="text-text-tertiary hover:text-text-primary transition-colors">
+                  <X className="h-4 w-4" />
+                </Dialog.Close>
+              </div>
+              <div className="px-5 py-4 space-y-3">
+                {metaBlock.status === 409 ? (
+                  <SlateGuardNotice
+                    detail={metaBlock.detail}
+                    slated={metaBlock.slated}
+                    busy={metaBusy}
+                    onForce={() => resolveMetaBlock('delivery', true)}
+                    onCancel={() => resolveMetaBlock('review', false)}
+                    cancelLabel="Make it a review link"
+                  />
+                ) : (
+                  <>
+                    <p className="text-xs text-status-error">
+                      The link was created, but its kind and internal label didn&apos;t save ({metaBlock.detail}).
+                      You can set them on the link&apos;s settings page.
+                    </p>
+                    <div className="flex justify-end">
+                      <Button size="sm" onClick={() => { setMetaBlock(null); onOpenChange(false) }}>
+                        Close
+                      </Button>
+                    </div>
+                  </>
+                )}
+              </div>
+            </>
+          ) : phase === 'result' && createdResult ? (
             <LinkCreatedPhase
               result={createdResult}
               allResults={allCreatedResults}
