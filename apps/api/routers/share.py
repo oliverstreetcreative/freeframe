@@ -1677,9 +1677,15 @@ def get_share_stream_url(
             ),
             prefer_original=prefer_original or osc_master,
         )
-        url = generate_presigned_get_url(
-            choice.s3_key, download_filename=download_filename(asset, media_file, choice),
-        )
+        filename = download_filename(asset, media_file, choice)
+        # OSC 0018: the master arrives under its OWN file name (the delivery name the editor gave it,
+        # e.g. torres_..._v14_WEB_..._-16LUFS.mp4), since the item is now named for the deliverable
+        # ("01_Waste") and its review rounds share it. Only when that name and the served bytes agree.
+        if choice.s3_key == media_file.s3_key_raw:
+            stem = _os.path.splitext(media_file.original_filename or "")[0]
+            if stem:
+                filename = build_download_filename(stem, choice.s3_key, media_file.original_filename)
+        url = generate_presigned_get_url(choice.s3_key, download_filename=filename)
     elif asset.asset_type == AssetType.video and media_file.s3_key_processed:
         # Route through /stream/hls so S3 can stay private (#51)
         hls_token = create_hls_token(media_file.s3_key_processed)
