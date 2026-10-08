@@ -38,7 +38,16 @@ def main() -> None:
                 fps double precision,
                 probed_at timestamptz NOT NULL DEFAULT now()
             )"""))
-    print("osc_status_ddl: assetstatus has client_review; osc_guest_approvals, osc_version_tc ready")
+        # OSC 0016: a human label for a version that came from a merged item ("v8 · ALT B Homeward"),
+        # shown instead of the file-name label. Set only by the superadmin merge.
+        conn.execute(text("""
+            CREATE TABLE IF NOT EXISTS osc_version_labels (
+                version_id uuid PRIMARY KEY REFERENCES asset_versions(id) ON DELETE CASCADE,
+                label varchar(120) NOT NULL,
+                created_at timestamptz NOT NULL DEFAULT now()
+            )"""))
+    print("osc_status_ddl: assetstatus has client_review; osc_guest_approvals, osc_version_tc, "
+          "osc_version_labels ready")
 
 
 if __name__ == "__main__":

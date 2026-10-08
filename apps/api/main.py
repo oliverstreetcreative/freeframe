@@ -110,6 +110,8 @@ from .routers import osc_share_decision  # OSC: client approve / request changes
 app.include_router(osc_share_decision.router)
 from .routers import osc_source_tc  # OSC 0013: the clip's real source timecode for the player
 app.include_router(osc_source_tc.router)
+from .routers import osc_merge  # OSC 0016: merge items into one stacked item (superadmin)
+app.include_router(osc_merge.router)
 
 @app.get("/health")
 def health():
