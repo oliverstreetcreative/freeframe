@@ -46,8 +46,18 @@ def main() -> None:
                 label varchar(120) NOT NULL,
                 created_at timestamptz NOT NULL DEFAULT now()
             )"""))
+        # OSC 0019: a share link's KIND (review = comment, no download; delivery = view, download,
+        # latest version only) and its INTERNAL LABEL (staff-only; the public title stays on
+        # share_links.title). No row = kind inferred from the link's settings.
+        conn.execute(text("""
+            CREATE TABLE IF NOT EXISTS osc_share_meta (
+                share_link_id uuid PRIMARY KEY REFERENCES share_links(id) ON DELETE CASCADE,
+                kind varchar(16) NOT NULL CHECK (kind IN ('review', 'delivery')),
+                internal_label varchar(255),
+                updated_at timestamptz NOT NULL DEFAULT now()
+            )"""))
     print("osc_status_ddl: assetstatus has client_review; osc_guest_approvals, osc_version_tc, "
-          "osc_version_labels ready")
+          "osc_version_labels, osc_share_meta ready")
 
 
 if __name__ == "__main__":

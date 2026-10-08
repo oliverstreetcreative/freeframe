@@ -261,6 +261,8 @@ export default function SharePage({
         showVersions: boolean
         appearance: ShareLinkAppearance | null
         branding: ProjectBranding | null
+        title: string | null // OSC 0019: the link's PUBLIC title
+        description: string | null // OSC 0019: shown to the client on the page
       }
     | {
         stage: 'folder_ready'
@@ -360,6 +362,8 @@ export default function SharePage({
         showVersions: data.show_versions ?? true,
         appearance: data.appearance ?? null,
         branding: data.branding ?? null,
+        title: data.title ?? null,
+        description: data.description ?? null,
       })
     } catch {
       setState({ stage: 'invalid' })
@@ -450,6 +454,8 @@ export default function SharePage({
       appearance={state.appearance}
       branding={state.branding}
       shareSession={shareSession}
+      title={state.title}
+      description={state.description}
     />
   )
 }
@@ -465,7 +471,7 @@ export default function SharePage({
  * and then defers entirely.
  */
 function SingleAssetShareViewer({
-  token, asset, permission, allowDownload, showVersions, appearance, branding, shareSession,
+  token, asset, permission, allowDownload, showVersions, appearance, branding, shareSession, title, description,
 }: {
   token: string
   asset: { id: string; name: string }
@@ -475,6 +481,8 @@ function SingleAssetShareViewer({
   appearance?: ShareLinkAppearance | null
   branding?: { primary_color?: string | null } | null
   shareSession?: string | null
+  title?: string | null // OSC 0019
+  description?: string | null // OSC 0019
 }) {
   // Same resolution the folder grid uses: the link's own accent wins over the
   // project's, which wins over the built-in. No fallback, so a link with no
@@ -492,6 +500,8 @@ function SingleAssetShareViewer({
         permission={permission}
         allowDownload={allowDownload}
         showVersions={showVersions}
+        linkTitle={title}
+        linkDescription={description}
       />
     </div>
   )

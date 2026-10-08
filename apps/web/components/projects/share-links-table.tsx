@@ -7,8 +7,12 @@ import { cn } from '@/lib/utils'
 import { formatRelativeTime } from '@/lib/utils'
 import { withBasePath } from '@/lib/base-path'
 import type { ShareLinkListItem } from '@/types'
+import { useShareMeta } from '@/hooks/use-share-meta'
+import { KindBadge } from '@/components/projects/share-kind-controls'
 
 interface ShareLinksTableProps {
+  /** OSC 0019: for the kind / internal-label map */
+  projectId?: string
   shareLinks: ShareLinkListItem[]
   onSelectLink: (token: string) => void
   onToggleEnabled: (token: string, enabled: boolean) => void
@@ -17,6 +21,7 @@ interface ShareLinksTableProps {
 }
 
 export function ShareLinksTable({
+  projectId,
   shareLinks,
   onSelectLink,
   onToggleEnabled,
@@ -25,12 +30,18 @@ export function ShareLinksTable({
 }: ShareLinksTableProps) {
   const [search, setSearch] = React.useState('')
   const [copiedToken, setCopiedToken] = React.useState<string | null>(null)
+  // OSC 0019: staff see the INTERNAL label first; the public title is what the client sees.
+  const { shareMeta } = useShareMeta(projectId)
 
   const filtered = React.useMemo(() => {
     const q = search.trim().toLowerCase()
     if (!q) return shareLinks
-    return shareLinks.filter((link) => link.title.toLowerCase().includes(q))
-  }, [shareLinks, search])
+    return shareLinks.filter(
+      (link) =>
+        link.title.toLowerCase().includes(q) ||
+        (shareMeta[link.id]?.internal_label ?? '').toLowerCase().includes(q),
+    )
+  }, [shareLinks, search, shareMeta])
 
   const handleCopy = React.useCallback(
     async (token: string, e: React.MouseEvent) => {
@@ -99,6 +110,8 @@ export function ShareLinksTable({
                 const shareUrl = `${frontendUrl}${withBasePath(`/share/${link.token}`)}`
                 const isCopied = copiedToken === link.token
                 const isLast = i === filtered.length - 1
+                const meta = shareMeta[link.id]
+                const internalLabel = meta?.internal_label?.trim() || ''
 
                 return (
                   <tr
@@ -119,8 +132,18 @@ export function ShareLinksTable({
                         ) : (
                           <File className="h-4 w-4 text-text-tertiary shrink-0" />
                         )}
-                        <span className="text-text-primary font-medium truncate max-w-[180px]">
-                          {link.title}
+                        <span className="flex flex-col min-w-0">
+                          <span className="flex items-center gap-1.5 min-w-0">
+                            <span className="text-text-primary font-medium truncate max-w-[180px]">
+                              {internalLabel || link.title}
+                            </span>
+                            {meta && <KindBadge kind={meta.kind} />}
+                          </span>
+                          {internalLabel && (
+                            <span className="text-xs text-text-tertiary truncate max-w-[220px]">
+                              Client sees: {link.title}
+                            </span>
+                          )}
                         </span>
                       </button>
                     </td>
