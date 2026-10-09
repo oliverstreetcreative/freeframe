@@ -251,3 +251,16 @@ export function versionLabel(v: { version_number: number; osc_label?: string | n
   if (!v) return ''
   return v.osc_label || `v${v.version_number}`
 }
+
+/**
+ * OSC 0023 (Sam 10/8 22:50): the time an item shows and sorts by is when its LATEST version went up,
+ * not the first upload of the stack (a stack updated tonight read "Oct 4"). Falls back to the item's
+ * own created_at when no version time is known.
+ */
+export function itemTime(a: {
+  created_at: string
+  latest_version?: { created_at?: string | null } | null
+  latest_version_at?: string | null
+}): string {
+  return a.latest_version?.created_at || a.latest_version_at || a.created_at
+}

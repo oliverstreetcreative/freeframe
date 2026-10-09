@@ -32,6 +32,7 @@ import {
   assetNameFromFile,
   uploadNameForFile,
   versionLabel,
+  itemTime,
 } from "@/lib/utils";
 import { api } from "@/lib/api";
 import { withBasePath } from "@/lib/base-path";
@@ -1158,7 +1159,7 @@ export default function ProjectDetailPage() {
                           Uploaded
                         </span>
                         <span className="text-xs text-text-primary">
-                          {formatRelativeTime(selectedAsset.created_at)}
+                          {formatRelativeTime(itemTime(selectedAsset))}
                         </span>
                       </div>
                       {authorNames[selectedAsset.created_by] && (

@@ -3,7 +3,7 @@
 import * as React from 'react'
 import * as DropdownMenu from '@radix-ui/react-dropdown-menu'
 import { Film, Music, Image as ImageIcon, Images, MessageSquare, MoreHorizontal, Check, Share2, Download, Link as LinkIcon, Pencil, Trash2 } from 'lucide-react'
-import { cn, formatRelativeTime, formatBytes } from '@/lib/utils'
+import { cn, formatRelativeTime, formatBytes, itemTime } from '@/lib/utils'
 import { withBasePath } from '@/lib/base-path'
 import type { Asset, AssetType, User } from '@/types'
 import type { AspectRatio, ThumbnailScale, TitleLines } from '@/stores/view-store'
@@ -236,7 +236,7 @@ export function AssetCard({
           {/* Author + date + file size row */}
           <p className="text-2xs text-text-tertiary line-clamp-1">
             {showUploader && authorName && <span>{authorName} &bull; </span>}
-            {formatRelativeTime(asset.created_at)}
+            {formatRelativeTime(itemTime(asset))}
             {showFileSize && fileSize ? <span> &bull; {formatBytes(fileSize)}</span> : null}
           </p>
         </div>

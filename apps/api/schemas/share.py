@@ -159,6 +159,8 @@ class FolderShareAssetItem(BaseModel):
     version_count: int = 1
     created_by_name: Optional[str] = None
     created_at: datetime
+    # OSC 0023 (Sam 10/8): an item's time = when its LATEST version went up, not its first upload.
+    latest_version_at: Optional[datetime] = None
 
 
 class FolderShareSubfolder(BaseModel):
