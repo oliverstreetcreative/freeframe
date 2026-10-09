@@ -2,7 +2,7 @@
 
 import * as React from 'react'
 import { X, Download, MoreHorizontal, Layers, Share2, Trash2, FolderInput, FolderIcon, Check, Film, Music, Image as ImageIcon, Images } from 'lucide-react'
-import { cn, formatBytes } from '@/lib/utils'
+import { cn, formatBytes, itemTime } from '@/lib/utils'
 import { Button } from '@/components/ui/button'
 import { Avatar } from '@/components/shared/avatar'
 import { EmptyState } from '@/components/shared/empty-state'
@@ -739,7 +739,7 @@ export function AssetGrid({
                 </div>
                 {/* Date */}
                 <div className="hidden sm:block w-28 text-xs text-text-tertiary shrink-0">
-                  {new Date(asset.created_at).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}
+                  {new Date(itemTime(asset)).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}
                 </div>
                 {/* Assignee */}
                 <div className="w-8 shrink-0 flex justify-center">

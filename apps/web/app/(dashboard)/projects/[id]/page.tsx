@@ -21,7 +21,7 @@ import {
   Users,
   Settings,
 } from "lucide-react";
-import { cn, formatRelativeTime, formatBytes, versionLabel } from "@/lib/utils";
+import { cn, formatRelativeTime, formatBytes, versionLabel, itemTime } from "@/lib/utils";
 import { api, ApiError } from "@/lib/api";
 import { withBasePath } from "@/lib/base-path";
 import { Button } from "@/components/ui/button";
@@ -1180,7 +1180,7 @@ export default function ProjectDetailPage() {
                           Uploaded
                         </span>
                         <span className="text-xs text-text-primary">
-                          {formatRelativeTime(selectedAsset.created_at)}
+                          {formatRelativeTime(itemTime(selectedAsset))}
                         </span>
                       </div>
                       {authorNames[selectedAsset.created_by] && (

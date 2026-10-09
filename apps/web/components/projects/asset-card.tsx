@@ -2,7 +2,7 @@
 
 import * as React from 'react'
 import { Film, Music, Image as ImageIcon, Images, MoreHorizontal, Check } from 'lucide-react'
-import { cn, formatRelativeTime, formatBytes } from '@/lib/utils'
+import { cn, formatRelativeTime, formatBytes, itemTime } from '@/lib/utils'
 import type { Asset, AssetType, DownloadOption, User } from '@/types'
 import { ContextMenuArea, DotsMenu } from '@/components/shared/item-menu'
 import { CommentCountBadge } from '@/components/shared/comment-count-badge'
@@ -203,7 +203,7 @@ export function AssetCard({
           {/* Author + date + file size row */}
           <p className="text-2xs text-text-tertiary line-clamp-1">
             {showUploader && authorName && <span>{authorName} &bull; </span>}
-            {formatRelativeTime(asset.created_at)}
+            {formatRelativeTime(itemTime(asset))}
             {showFileSize && fileSize ? <span> &bull; {formatBytes(fileSize)}</span> : null}
           </p>
         </div>

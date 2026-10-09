@@ -11,7 +11,13 @@ interface SortableAsset {
   status: AssetStatus
   asset_type: string
   updated_at: string
+  // OSC 0023: the latest version's upload, when the caller has it
+  latest_version?: { created_at: string } | null
+  latest_version_at?: string | null
 }
+
+// OSC 0023: Date sorts by the latest version's upload (updated_at also moves on renames and moves).
+const dateOf = (a: SortableAsset) => a.latest_version?.created_at || a.latest_version_at || a.updated_at
 
 /**
  * The order the project view shows assets in. The review page's prev/next
@@ -31,7 +37,7 @@ export function sortAssets<T extends SortableAsset>(
   result.sort((a, b) => {
     let cmp = 0
     if (sortKey === 'date') {
-      cmp = new Date(a.updated_at).getTime() - new Date(b.updated_at).getTime()
+      cmp = new Date(dateOf(a)).getTime() - new Date(dateOf(b)).getTime()
     } else if (sortKey === 'name') {
       cmp = compareNames(a.name, b.name)
     } else if (sortKey === 'status') {
