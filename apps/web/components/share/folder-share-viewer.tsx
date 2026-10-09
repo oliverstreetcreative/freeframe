@@ -19,7 +19,7 @@ import {
   PanelRightOpen,
   ArrowLeft,
 } from 'lucide-react'
-import { cn } from '@/lib/utils'
+import { cn, itemTime } from '@/lib/utils'
 import { useShareAppearance } from '@/hooks/use-share-appearance'
 import { withBasePath } from '@/lib/base-path'
 import { useReview, type CreateCommentPayload } from '@/components/review/review-provider'
@@ -339,7 +339,7 @@ function AssetGridCard({ asset, allowDownload, token, shareSession, isSelected, 
           <p className="text-sm font-medium text-text-primary line-clamp-1">{asset.name}</p>
           <p className="text-xs text-text-tertiary mt-0.5 truncate">
             {asset.created_by_name && <>{asset.created_by_name} &middot; </>}
-            {formatShortDate(asset.created_at)}
+            {formatShortDate(itemTime(asset))}
             {asset.file_size != null && <> &middot; {formatFileSize(asset.file_size)}</>}
           </p>
         </div>
@@ -785,7 +785,7 @@ export function FolderShareViewer({
       if (sortBy === 'name') return a.name.localeCompare(b.name)
       if (sortBy === 'file_size') return (b.file_size ?? 0) - (a.file_size ?? 0)
       // default: created_at desc
-      return new Date(b.created_at).getTime() - new Date(a.created_at).getTime()
+      return new Date(itemTime(b)).getTime() - new Date(itemTime(a)).getTime() // OSC 0023: latest version first
     })
     return list
   }, [assets, searchQuery, sortBy])
@@ -1094,7 +1094,7 @@ export function FolderShareViewer({
                                     <p className="text-sm font-medium text-text-primary truncate leading-snug">{asset.name}</p>
                                     <p className="text-xs text-text-tertiary mt-0.5 truncate">
                                       {asset.created_by_name && <>{asset.created_by_name} &middot; </>}
-                                      {formatShortDate(asset.created_at)}
+                                      {formatShortDate(itemTime(asset))}
                                     </p>
                                   </div>
                                   {/* File size */}
@@ -1103,7 +1103,7 @@ export function FolderShareViewer({
                                   </span>
                                   {/* Date */}
                                   <span className="hidden sm:block w-28 text-xs text-text-tertiary shrink-0">
-                                    {formatDate(asset.created_at)}
+                                    {formatDate(itemTime(asset))}
                                   </span>
                                   {/* Download */}
                                   {allowDownload && (

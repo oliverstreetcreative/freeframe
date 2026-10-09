@@ -336,6 +336,8 @@ export interface FolderShareAssetItem {
   version_count?: number
   created_by_name: string | null
   created_at: string
+  /** OSC 0023: when the item's latest version went up (what the item shows and sorts by). */
+  latest_version_at?: string | null
 }
 
 export interface FolderShareSubfolder {

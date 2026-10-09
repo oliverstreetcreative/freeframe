@@ -1285,6 +1285,7 @@ def get_folder_share_assets(
                     duration_seconds=mf.duration_seconds if mf else None,
                     comment_count=comment_count,
                     version_count=(_ready_version_count(db, a.id) if link.show_versions else 1),
+                    latest_version_at=mf.created_at if mf else None,  # OSC 0023
                 ))
         else:
             total = 0
@@ -1406,6 +1407,7 @@ def get_folder_share_assets(
             version_count=(_ready_version_count(db, asset.id) if link.show_versions else 1),
             created_by_name=creator.name if creator else None,
             created_at=asset.created_at,
+            latest_version_at=media_file.created_at if media_file else None,  # OSC 0023
         ))
 
     return FolderShareAssetsResponse(
