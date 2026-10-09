@@ -46,6 +46,7 @@ import { useUploadStore } from "@/stores/upload-store";
 import { useAuthStore } from "@/stores/auth-store";
 import { useViewStore } from "@/stores/view-store";
 import { useBreadcrumbStore } from "@/stores/breadcrumb-store";
+import { useUrlFolder } from "@/hooks/use-url-folder"; // OSC 0021
 import { useComments } from "@/hooks/use-comments";
 import { useFolders, useTrash } from "@/hooks/use-folders";
 import { useShareLinks } from "@/hooks/use-share-links";
@@ -439,6 +440,15 @@ export default function ProjectDetailPage() {
     },
     [projectId],
   );
+
+  // OSC 0021: the header breadcrumb (and browser Back) change ?folder= on this same page; follow it.
+  // Before, the folder was read from the URL only once, so clicking a parent folder did nothing.
+  useUrlFolder((folderId) => {
+    setCurrentFolderId(folderId);
+    setShowTrash(false);
+    setShowShareLinks(false);
+    setSelectedShareLink(null);
+  });
 
   return (
     // No refusal handler here: it lives on the dashboard shell, which wraps
