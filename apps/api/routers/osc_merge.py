@@ -197,3 +197,28 @@ def merge(body: MergeIn, db: Session = Depends(get_db), current_user: User = Dep
             a.name = f"{a.name} (merged into {target.name})"[:255]
     db.commit()
     return {"dry_run": False, "target": target.name, "stack": plan}
+
+
+class LabelIn(BaseModel):
+    label: Optional[str] = None  # None / "" clears it (the file-name label shows again)
+
+
+@router.put("/osc/admin/versions/{version_id}/label")
+def set_version_label(version_id: uuid.UUID, body: LabelIn, db: Session = Depends(get_db),
+                      current_user: User = Depends(get_current_user)):
+    """OSC 0022: name a version for the reviewer, e.g. two same-round alternates "v2 · A midair" /
+    "v2 · B lastair" (Sam picks between them). Superadmin only; label only, nothing else changes."""
+    if not getattr(current_user, "is_superadmin", False):
+        raise HTTPException(403, "Superadmin only")
+    v = db.query(AssetVersion).filter(AssetVersion.id == version_id, AssetVersion.deleted_at.is_(None)).first()
+    if not v:
+        raise HTTPException(404, "Version not found")
+    label = (body.label or "").strip()[:120]
+    if label:
+        db.execute(text("""INSERT INTO osc_version_labels (version_id, label) VALUES (:v, :l)
+                           ON CONFLICT (version_id) DO UPDATE SET label = EXCLUDED.label"""),
+                   {"v": str(version_id), "l": label})
+    else:
+        db.execute(text("DELETE FROM osc_version_labels WHERE version_id = :v"), {"v": str(version_id)})
+    db.commit()
+    return {"version_id": str(version_id), "label": label or None}
