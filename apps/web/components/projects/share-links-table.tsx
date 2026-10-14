@@ -2,6 +2,8 @@
 
 import * as React from 'react'
 import * as Switch from '@radix-ui/react-switch'
+import { ShareScopePreview } from './share-scope-preview'
+import { useMediaQuery } from '@/hooks/use-media-query'
 import { Search, Folder, File, Copy, Check, Eye } from 'lucide-react'
 import { cn, copyToClipboard } from '@/lib/utils'
 import { formatRelativeTime } from '@/lib/utils'
@@ -28,6 +30,7 @@ export function ShareLinksTable({
   onViewActivity,
   frontendUrl,
 }: ShareLinksTableProps) {
+  const isDesktop = useMediaQuery('(min-width: 768px)')
   const [search, setSearch] = React.useState('')
   const [copyFailed, setCopyFailed] = React.useState(false)
   const [copiedToken, setCopiedToken] = React.useState<string | null>(null)
@@ -40,6 +43,7 @@ export function ShareLinksTable({
     return shareLinks.filter(
       (link) =>
         link.title.toLowerCase().includes(q) ||
+        (link.target_name ?? '').toLowerCase().includes(q) ||
         (shareMeta[link.id]?.internal_label ?? '').toLowerCase().includes(q),
     )
   }, [shareLinks, search, shareMeta])
@@ -58,7 +62,7 @@ export function ShareLinksTable({
   )
 
   return (
-    <div className="flex flex-col h-full">
+    <div className="flex min-w-0 w-full flex-col">
       {/* Search bar */}
       <div className="relative mb-3">
         <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-text-tertiary pointer-events-none" />
@@ -67,7 +71,7 @@ export function ShareLinksTable({
           value={search}
           onChange={(e) => setSearch(e.target.value)}
           placeholder="Search for Shares"
-          className="w-full h-9 pl-9 pr-3 rounded-lg border border-border bg-bg-tertiary text-sm text-text-primary placeholder:text-text-tertiary focus:outline-none focus:border-border-focus transition-colors"
+          className="w-full h-9 pl-9 pr-3 rounded-lg border border-border bg-bg-tertiary text-[16px] sm:text-sm text-text-primary placeholder:text-text-tertiary focus:outline-none focus:border-border-focus transition-colors"
         />
       </div>
 
@@ -80,6 +84,32 @@ export function ShareLinksTable({
               ? 'No share links yet. Create one by sharing an asset or folder.'
               : 'No share links match your search.'}
           </p>
+        </div>
+      ) : !isDesktop ? (
+        <div className="space-y-3 min-w-0" aria-label="Share links">
+          {filtered.map(link => {
+            const meta = shareMeta[link.id]
+            const label = meta?.internal_label?.trim() || link.title
+            const url = `${frontendUrl}${withBasePath(`/share/${link.token}`)}`
+            return <article key={link.token} className="min-w-0 rounded-lg border border-border bg-bg-secondary p-3 space-y-3">
+              <button onClick={() => onSelectLink(link.token)} className="block w-full min-w-0 text-left">
+                <span className="block text-sm font-medium text-text-primary break-words [overflow-wrap:anywhere]">{label}</span>
+                {meta && <span className="inline-flex mt-1"><KindBadge kind={meta.kind}/></span>}
+                {meta?.internal_label && <span className="block mt-1 text-xs text-text-tertiary break-words [overflow-wrap:anywhere]">Client sees: {link.title}</span>}
+              </button>
+              <ShareScopePreview token={link.token} enabled={link.is_enabled} targetName={link.target_name || link.title}/>
+              <div className="flex min-w-0 items-center gap-2">
+                <input aria-label={`Share URL for ${label}`} readOnly value={url} onFocus={e=>e.currentTarget.select()} className="min-w-0 flex-1 rounded border border-border bg-bg-tertiary px-2 py-2 text-[16px] font-mono text-text-secondary"/>
+                <button title="Copy link" onClick={e=>handleCopy(link.token,e)} className="shrink-0 rounded border border-border px-3 py-2 text-sm">{copiedToken===link.token?'Copied!':'Copy'}</button>
+              </div>
+              <div className="flex flex-wrap items-center gap-x-4 gap-y-2 text-xs text-text-tertiary">
+                <label className="flex items-center gap-2">Enabled<Switch.Root aria-label={`Enable ${label}`} checked={link.is_enabled} onCheckedChange={checked=>onToggleEnabled(link.token,checked)} className="relative h-5 w-9 rounded-full bg-border data-[state=checked]:bg-accent"><Switch.Thumb className="block h-4 w-4 rounded-full bg-white translate-x-[2px] data-[state=checked]:translate-x-[18px]"/></Switch.Root></label>
+                <span>{link.view_count} {link.view_count===1?'view':'views'}</span>
+                <span>Last viewed: {link.last_viewed_at?formatRelativeTime(link.last_viewed_at):'Never'}</span>
+                <button onClick={()=>onViewActivity(link.token)} className="py-1 text-text-secondary">View activity</button>
+              </div>
+            </article>
+          })}
         </div>
       ) : (
         <div className="overflow-x-auto rounded-lg border border-border">
@@ -155,7 +185,7 @@ export function ShareLinksTable({
                     {/* Link */}
                     <td className="px-4 py-3">
                       <div className="flex items-center gap-2">
-                        <span className="inline-flex items-center rounded-md border border-border bg-bg-tertiary px-2 py-1 text-xs text-text-secondary font-mono select-text break-all max-w-[200px]">
+                        <span className="inline-flex items-center rounded-md border border-border bg-bg-tertiary px-2 py-1 text-xs text-text-secondary font-mono select-text whitespace-nowrap max-w-[200px] overflow-hidden text-ellipsis">
                           {shareUrl}
                         </span>
                         <button

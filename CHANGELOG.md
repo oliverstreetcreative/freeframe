@@ -9,6 +9,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Share links use compact mobile cards with asset names and previews; detail controls wrap, asset names remain readable, and touch inputs avoid focus zoom.
+
 - Share creation keeps the URL and Copy control available until dismissed; mobile projects now expose All Share Links and copying uses the browser fallback.
 
 ### Fixed
