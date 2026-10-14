@@ -33,6 +33,7 @@ export function ShareLinksTable({
   frontendUrl,
 }: ShareLinksTableProps) {
   const [search, setSearch] = React.useState('')
+  const [copyFailed, setCopyFailed] = React.useState(false)
   const [copiedToken, setCopiedToken] = React.useState<string | null>(null)
   // OSC 0019: staff see the INTERNAL label first; the public title is what the client sees.
   const { shareMeta } = useShareMeta(projectId)
@@ -51,7 +52,9 @@ export function ShareLinksTable({
     async (token: string, e: React.MouseEvent) => {
       e.stopPropagation()
       const url = `${frontendUrl}${withBasePath(`/share/${token}`)}`
-      if (!(await copyToClipboard(url))) return
+      const ok = await copyToClipboard(url)
+      setCopyFailed(!ok)
+      if (!ok) return
       setCopiedToken(token)
       setTimeout(() => setCopiedToken(null), 2000)
     },
@@ -72,6 +75,7 @@ export function ShareLinksTable({
         />
       </div>
 
+      {copyFailed && <p role="status" className="text-xs text-status-error">Copy failed. Select the URL and copy it manually.</p>}
       {/* Table */}
       {filtered.length === 0 ? (
         <div className="flex-1 flex items-center justify-center py-16 text-center">
@@ -162,7 +166,7 @@ export function ShareLinksTable({
                     {/* Link */}
                     <td className="px-4 py-3">
                       <div className="flex items-center gap-2">
-                        <span className="inline-flex items-center rounded-md border border-border bg-bg-tertiary px-2 py-1 text-xs text-text-secondary font-mono truncate max-w-[200px]">
+                        <span className="inline-flex items-center rounded-md border border-border bg-bg-tertiary px-2 py-1 text-xs text-text-secondary font-mono select-text break-all max-w-[200px]">
                           {shareUrl}
                         </span>
                         <button
