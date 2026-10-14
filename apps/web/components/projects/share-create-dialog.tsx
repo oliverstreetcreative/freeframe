@@ -356,8 +356,9 @@ function ConfigurePhase({ defaultTitle, onBack, onCreate, creating }: ConfigureP
 
         {/* OSC 0019: internal label */}
         <div className="space-y-1.5">
-          <label className="text-xs font-medium text-text-secondary">Internal label (only OSC sees this)</label>
+          <label className="text-xs font-medium text-text-secondary">Name (internal)</label>
           <input
+            aria-label="Name"
             value={internalLabel}
             maxLength={255}
             onChange={(e) => setInternalLabel(e.target.value)}
@@ -368,8 +369,9 @@ function ConfigurePhase({ defaultTitle, onBack, onCreate, creating }: ConfigureP
 
         {/* Link name (OSC 0019: the PUBLIC title) */}
         <div className="space-y-1.5">
-          <label className="text-xs font-medium text-text-secondary">Public title (the client sees this)</label>
+          <label className="text-xs font-medium text-text-secondary">Title (share-page heading)</label>
           <input
+            aria-label="Title"
             value={title}
             onChange={(e) => setTitle(e.target.value)}
             placeholder={defaultTitle}
@@ -379,8 +381,9 @@ function ConfigurePhase({ defaultTitle, onBack, onCreate, creating }: ConfigureP
 
         {/* OSC 0019: description */}
         <div className="space-y-1.5">
-          <label className="text-xs font-medium text-text-secondary">Description (shown on the share page)</label>
+          <label className="text-xs font-medium text-text-secondary">Description</label>
           <textarea
+            aria-label="Description"
             value={description}
             onChange={(e) => setDescription(e.target.value)}
             rows={2}
@@ -1299,7 +1302,7 @@ export function ShareCreateDialog({
                 ) : (
                   <>
                     <p className="text-xs text-status-error">
-                      The link was created, but its kind and internal label didn&apos;t save ({metaBlock.detail}).
+                      The link was created, but its kind and name didn&apos;t save ({metaBlock.detail}).
                       You can set them on the link&apos;s settings page.
                     </p>
                     <div className="flex justify-end">

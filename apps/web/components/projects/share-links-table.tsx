@@ -89,13 +89,14 @@ export function ShareLinksTable({
         <div className="space-y-3 min-w-0" aria-label="Share links">
           {filtered.map(link => {
             const meta = shareMeta[link.id]
-            const label = meta?.internal_label?.trim() || link.title
+            const label = meta?.internal_label?.trim() || 'Unnamed share'
             const url = `${frontendUrl}${withBasePath(`/share/${link.token}`)}`
             return <article key={link.token} className="min-w-0 rounded-lg border border-border bg-bg-secondary p-3 space-y-3">
               <button onClick={() => onSelectLink(link.token)} className="block w-full min-w-0 text-left">
-                <span className="block text-sm font-medium text-text-primary break-words [overflow-wrap:anywhere]">{label}</span>
+                <span className="block text-sm font-medium text-text-primary break-words [overflow-wrap:anywhere]">Name: {label}</span>
                 {meta && <span className="inline-flex mt-1"><KindBadge kind={meta.kind}/></span>}
-                {meta?.internal_label && <span className="block mt-1 text-xs text-text-tertiary break-words [overflow-wrap:anywhere]">Client sees: {link.title}</span>}
+                <span className="block mt-1 text-xs text-text-tertiary break-words [overflow-wrap:anywhere]">Title: {link.title}</span>
+                {link.description && <span className="block mt-1 text-xs text-text-secondary break-words [overflow-wrap:anywhere]">Description: {link.description}</span>}
               </button>
               <ShareScopePreview token={link.token} enabled={link.is_enabled} targetName={link.target_name || link.title}/>
               <div className="flex min-w-0 items-center gap-2">
@@ -117,7 +118,7 @@ export function ShareLinksTable({
             <thead>
               <tr className="border-b border-border bg-bg-secondary">
                 <th className="px-4 py-2.5 text-left text-xs font-semibold text-text-tertiary uppercase tracking-wider">
-                  Title
+                  Name
                 </th>
                 <th className="px-4 py-2.5 text-left text-xs font-semibold text-text-tertiary uppercase tracking-wider">
                   Link
@@ -169,15 +170,16 @@ export function ShareLinksTable({
                         <span className="flex flex-col min-w-0">
                           <span className="flex items-center gap-1.5 min-w-0">
                             <span className="text-text-primary font-medium truncate max-w-[180px]">
-                              {internalLabel || link.title}
+                              {internalLabel || 'Unnamed share'}
                             </span>
                             {meta && <KindBadge kind={meta.kind} />}
                           </span>
-                          {internalLabel && (
+                          {(
                             <span className="text-xs text-text-tertiary truncate max-w-[220px]">
-                              Client sees: {link.title}
+                              Title: {link.title}
                             </span>
                           )}
+                          {link.description && <span className="text-xs text-text-tertiary truncate max-w-[220px]">Description: {link.description}</span>}
                         </span>
                       </button>
                     </td>

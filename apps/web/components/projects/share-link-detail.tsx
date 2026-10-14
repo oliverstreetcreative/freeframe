@@ -746,10 +746,11 @@ export function ShareLinkContent({
           )}
           <div className="space-y-1.5">
             <label className="text-xs font-medium text-text-secondary">
-              Internal label (only OSC sees this)
+              Name (internal)
             </label>
             <input
               type="text"
+              aria-label="Name"
               value={localLabel}
               maxLength={255}
               onChange={(e) => setLocalLabel(e.target.value)}
@@ -767,9 +768,10 @@ export function ShareLinkContent({
         {/* Editable title (OSC 0019: this is the PUBLIC title) */}
         <div className="space-y-1">
           <label className="text-xs font-medium text-text-secondary">
-            Public title (the client sees this)
+            Title (share-page heading)
           </label>
           <textarea rows={3}
+            aria-label="Title"
             value={localTitle}
             onChange={(e) => setLocalTitle(e.target.value)}
             onBlur={() => {
@@ -785,9 +787,10 @@ export function ShareLinkContent({
         {/* Editable description (OSC 0019: shown to the client on the share page) */}
         <div className="space-y-1">
           <label className="text-xs font-medium text-text-secondary">
-            Description (shown on the share page)
+            Description
           </label>
           <textarea
+            aria-label="Description"
             value={localDescription}
             onChange={(e) => setLocalDescription(e.target.value)}
             onBlur={() => {
