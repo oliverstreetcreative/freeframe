@@ -314,6 +314,8 @@ Thank you to @jdanna, @Lennart-Pingpong and @sb123sb123 for the pull requests in
 
 ### Fixed
 
+- Share links use compact mobile cards with asset names and previews; detail controls wrap, asset names remain readable, and touch inputs avoid focus zoom.
+
 - Share creation keeps the URL and Copy control available until dismissed; mobile projects now expose All Share Links and copying uses the browser fallback.
 
 ### Fixed
