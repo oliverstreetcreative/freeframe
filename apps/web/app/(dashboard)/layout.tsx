@@ -66,13 +66,13 @@ export default function DashboardLayout({
       {/* Main content area */}
       <main
         className={cn(
-          "flex flex-1 flex-col overflow-hidden transition-[margin] duration-200 ease-spring",
+          "flex min-w-0 flex-1 flex-col overflow-hidden transition-[margin] duration-200 ease-spring",
           sidebarCollapsed ? "ml-[52px]" : "ml-[220px]",
         )}
       >
         {!isAssetViewer && <Header onSearchOpen={() => setCommandOpen(true)} />}
 
-        <div className="relative flex-1 overflow-y-auto">{children}</div>
+        <div className="relative min-w-0 flex-1 overflow-y-auto">{children}</div>
       </main>
 
       {/* Attribution floats over the content rather than living in the sidebar,

@@ -626,6 +626,7 @@ export function ShareLinkContent({
       asset_type: string;
     }[]
   >([]);
+  const [previewAssetCount, setPreviewAssetCount] = React.useState(0);
   const [previewFolders, setPreviewFolders] = React.useState<
     { id: string; name: string; item_count: number }[]
   >([]);
@@ -652,7 +653,7 @@ export function ShareLinkContent({
           asset_type: string;
           thumbnail_url: string | null;
         }>(`/assets/${shareLink.asset_id}`)
-        .then((asset) => setPreviewThumbnails([asset]))
+        .then((asset) => { setPreviewThumbnails([asset]); setPreviewAssetCount(1); })
         .catch(() => setPreviewThumbnails([]));
       setPreviewFolders([]);
     } else if (folderId || isProjectShare) {
@@ -667,8 +668,9 @@ export function ShareLinkContent({
       fetch(`${API_URL}/share/${token}/assets?page=1&per_page=50`, { headers })
         .then((r) => r.ok ? r.json() : Promise.reject())
         .then((data) => {
+          setPreviewAssetCount(data.total ?? data.assets?.length ?? 0);
           setPreviewThumbnails(
-            (data.assets || []).slice(0, 4).map((a: any) => ({
+            (data.assets || []).map((a: any) => ({
               id: a.id,
               name: a.name,
               asset_type: a.asset_type,
@@ -705,7 +707,7 @@ export function ShareLinkContent({
 
   return (
     <div className="flex-1 flex flex-col min-w-0 overflow-y-auto">
-      <div className="p-6 space-y-6">
+      <div className="min-w-0 p-3 sm:p-6 space-y-6">
         {/* Back button */}
         <button
           onClick={onBack}
@@ -717,7 +719,7 @@ export function ShareLinkContent({
 
         {/* OSC 0019: kind + internal label (staff only) */}
         <div className="rounded-lg border border-border bg-bg-tertiary/40 p-4 space-y-3">
-          <div className="flex items-center justify-between gap-3">
+          <div className="flex flex-col items-start sm:flex-row sm:items-center justify-between gap-3">
             <div className="min-w-0">
               <p className="text-sm text-text-primary">Kind</p>
               <p className="text-xs text-text-tertiary mt-0.5">
@@ -757,7 +759,7 @@ export function ShareLinkContent({
                 }
               }}
               placeholder="e.g. Brand film v3, for Jo's notes"
-              className="w-full rounded-md border border-border bg-bg-tertiary px-3 py-2 text-sm text-text-primary placeholder:text-text-tertiary outline-none focus:border-accent/50"
+              className="w-full rounded-md border border-border bg-bg-tertiary px-3 py-2 text-[16px] sm:text-sm text-text-primary placeholder:text-text-tertiary outline-none focus:border-accent/50"
             />
           </div>
         </div>
@@ -767,8 +769,7 @@ export function ShareLinkContent({
           <label className="text-xs font-medium text-text-secondary">
             Public title (the client sees this)
           </label>
-          <input
-            type="text"
+          <textarea rows={3}
             value={localTitle}
             onChange={(e) => setLocalTitle(e.target.value)}
             onBlur={() => {
@@ -777,7 +778,7 @@ export function ShareLinkContent({
               }
             }}
             placeholder="Untitled Share Link"
-            className="w-full bg-transparent text-2xl font-semibold text-text-primary placeholder:text-text-tertiary outline-none border-none focus:ring-0"
+            className="w-full bg-transparent text-xl sm:text-2xl resize-none font-semibold text-text-primary placeholder:text-text-tertiary outline-none border-none focus:ring-0"
           />
         </div>
 
@@ -796,7 +797,7 @@ export function ShareLinkContent({
             }}
             placeholder="Add a description..."
             rows={2}
-            className="w-full bg-transparent text-sm text-text-secondary placeholder:text-text-tertiary outline-none border-none resize-none focus:ring-0"
+            className="w-full bg-transparent text-[16px] sm:text-sm text-text-secondary placeholder:text-text-tertiary outline-none border-none resize-none focus:ring-0"
           />
         </div>
 
@@ -810,7 +811,7 @@ export function ShareLinkContent({
                   {previewFolders.length}{" "}
                   {previewFolders.length === 1 ? "Folder" : "Folders"}
                 </span>
-                <div className="grid grid-cols-3 gap-3">
+                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
                   {previewFolders.map((folder) => (
                     <div
                       key={folder.id}
@@ -833,7 +834,7 @@ export function ShareLinkContent({
                         </svg>
                       </div>
                       <div className="px-3 py-2">
-                        <p className="text-sm font-medium text-text-primary truncate">
+                        <p className="text-sm font-medium text-text-primary break-words [overflow-wrap:anywhere]">
                           {folder.name}
                         </p>
                         <p className="text-xs text-text-tertiary mt-0.5">
@@ -850,11 +851,12 @@ export function ShareLinkContent({
             {previewThumbnails.length > 0 && (
               <>
                 <span className="text-xs text-text-tertiary font-medium uppercase tracking-wider">
-                  {previewThumbnails.length}{" "}
-                  {previewThumbnails.length === 1 ? "Asset" : "Assets"}
+                  {previewAssetCount}{" "}
+                  {previewAssetCount === 1 ? "Asset" : "Assets"}
                 </span>
-                <div className="grid grid-cols-3 gap-3">
-                  {previewThumbnails.slice(0, 6).map((asset) => (
+                {previewAssetCount > previewThumbnails.length && <p className="text-xs text-text-tertiary">Showing {previewThumbnails.length} of {previewAssetCount} assets</p>}
+                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+                  {previewThumbnails.map((asset) => (
                     <div
                       key={asset.id}
                       className="rounded-lg border border-border bg-bg-tertiary/50 overflow-hidden"
@@ -872,7 +874,7 @@ export function ShareLinkContent({
                         )}
                       </div>
                       <div className="px-3 py-2">
-                        <p className="text-sm font-medium text-text-primary truncate">
+                        <p className="text-sm font-medium text-text-primary break-words [overflow-wrap:anywhere]">
                           {asset.name}
                         </p>
                       </div>
@@ -894,7 +896,7 @@ export function ShareLinkContent({
         )}
 
         {/* Action buttons */}
-        <div className="flex items-center gap-3">
+        <div className="flex flex-wrap items-center gap-3">
           <button
             onClick={() => window.open(shareUrl, "_blank")}
             className="inline-flex items-center gap-2 rounded-lg bg-accent px-4 py-2 text-sm font-medium text-text-inverse hover:bg-accent/90 transition-colors"
