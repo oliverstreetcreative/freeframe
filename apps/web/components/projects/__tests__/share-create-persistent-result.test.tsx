@@ -46,3 +46,16 @@ it('offers a selectable URL when copying fails',async()=>{
  expect(await screen.findByText('Copy failed. Select the URL and copy it manually.')).toBeVisible()
  expect(screen.getByRole('textbox',{name:'Share URL'})).toHaveAttribute('readonly')
 })
+it('keeps Name, Title and Description mapped to their existing storage fields',async()=>{
+ const close=vi.fn()
+ render(<ShareCreateDialog open onOpenChange={close} projectId="p" currentFolderId={null} assets={[]} folders={[]} preselectedItem={{type:'asset',id:'a',name:'Fixture asset'}} onShareCreated={vi.fn()} />)
+ fireEvent.change(await screen.findByRole('textbox',{name:/^Name$/}),{target:{value:'Internal square review'}})
+ fireEvent.change(screen.getByRole('textbox',{name:/^Title$/}),{target:{value:'Client heading'}})
+ fireEvent.change(screen.getByRole('textbox',{name:/^Description$/}),{target:{value:'Longer explanatory text.'}})
+ fireEvent.click(screen.getByRole('button',{name:/^Create$/}))
+ await screen.findByRole('textbox',{name:'Share URL'})
+ // v1.22.1: the create request carries every link setting (upstream #498), so check only the two fields this maps.
+ expect(mocks.post).toHaveBeenCalledWith('/assets/a/share',expect.objectContaining({title:'Client heading',description:'Longer explanatory text.'}))
+ expect(mocks.meta).toHaveBeenCalledWith('fixture-id',{kind:'review',internal_label:'Internal square review'})
+ expect(close).not.toHaveBeenCalled()
+})
