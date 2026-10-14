@@ -690,6 +690,16 @@ export default function ProjectDetailPage() {
         onClick={() => setSelectedAsset(null)}
       >
         <div className="px-5 pt-3 pb-6 space-y-3">
+          {canSeeShareLinks && (
+            <div className="flex gap-2 lg:hidden">
+              <button className="rounded-md border border-border px-3 py-2 text-sm" onClick={(e) => {
+                e.stopPropagation(); setShowShareLinks(false); setSelectedShareLink(null); setShowTrash(false);
+              }}>Assets</button>
+              <button className="rounded-md border border-border px-3 py-2 text-sm" onClick={(e) => {
+                e.stopPropagation(); setShowShareLinks(true); setSelectedShareLink(null); setShowTrash(false); setCurrentFolderId(null);
+              }}>All Share Links ({shareLinks.length})</button>
+            </div>
+          )}
           {/* Asset grid, Share links, or Trash view */}
           {showShareLinks && !selectedShareLink ? (
             <ShareLinksTable

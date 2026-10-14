@@ -24,7 +24,7 @@ import {
   Globe,
   X,
 } from "lucide-react";
-import { cn } from "@/lib/utils";
+import { cn, copyToClipboard } from "@/lib/utils";
 import { withBasePath } from "@/lib/base-path";
 import { api } from "@/lib/api";
 import { ShareLinkActivityPanel } from "@/components/projects/share-link-activity";
@@ -478,15 +478,13 @@ function ShareUserSearch({ shareLink }: { shareLink: ShareLink }) {
 
 function CopyButton({ text, className }: { text: string; className?: string }) {
   const [copied, setCopied] = React.useState(false);
+  const [copyFailed, setCopyFailed] = React.useState(false);
 
   async function handleCopy() {
-    try {
-      await navigator.clipboard.writeText(text);
-      setCopied(true);
-      setTimeout(() => setCopied(false), 2000);
-    } catch {
-      // Fallback
-    }
+    const ok = await copyToClipboard(text);
+    setCopyFailed(!ok);
+    setCopied(ok);
+    if (ok) setTimeout(() => setCopied(false), 2000);
   }
 
   return (
@@ -496,7 +494,7 @@ function CopyButton({ text, className }: { text: string; className?: string }) {
         "inline-flex items-center gap-1.5 rounded px-2 py-1 text-xs text-text-secondary hover:bg-bg-hover hover:text-text-primary transition-colors",
         className,
       )}
-      title="Copy to clipboard"
+      title={copyFailed ? "Copy failed. Select the URL and copy manually." : "Copy to clipboard"}
     >
       {copied ? (
         <>
@@ -506,7 +504,7 @@ function CopyButton({ text, className }: { text: string; className?: string }) {
       ) : (
         <>
           <Copy className="h-3.5 w-3.5" />
-          <span>Copy</span>
+          <span>{copyFailed ? "Copy failed — select URL" : "Copy"}</span>
         </>
       )}
     </button>
@@ -517,15 +515,13 @@ function CopyButton({ text, className }: { text: string; className?: string }) {
 
 function CopyLinkButton({ text }: { text: string }) {
   const [copied, setCopied] = React.useState(false);
+  const [copyFailed, setCopyFailed] = React.useState(false);
 
   async function handleCopy() {
-    try {
-      await navigator.clipboard.writeText(text);
-      setCopied(true);
-      setTimeout(() => setCopied(false), 2000);
-    } catch {
-      // Fallback
-    }
+    const ok = await copyToClipboard(text);
+    setCopyFailed(!ok);
+    setCopied(ok);
+    if (ok) setTimeout(() => setCopied(false), 2000);
   }
 
   return (
@@ -546,7 +542,7 @@ function CopyLinkButton({ text }: { text: string }) {
       ) : (
         <>
           <Copy className="h-4 w-4" />
-          Copy Link
+          {copyFailed ? "Copy failed — select URL" : "Copy Link"}
         </>
       )}
     </button>
@@ -999,9 +995,7 @@ export function ShareLinkSettingsPanel({ token }: ShareLinkSettingsPanelProps) {
               />
               {/* URL + Visibility dropdown */}
               <div className="flex items-center gap-2 rounded-md bg-bg-tertiary px-3 py-2 mt-2">
-                <span className="flex-1 truncate font-mono text-xs text-text-secondary">
-                  {shareUrl}
-                </span>
+                <input aria-label="Share URL" readOnly value={shareUrl} onFocus={(e) => e.currentTarget.select()} className="flex-1 min-w-0 bg-transparent font-mono text-xs text-text-secondary" />
                 <CopyButton text={shareUrl} />
                 <select
                   value={shareLink.visibility || "public"}
