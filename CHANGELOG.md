@@ -9,6 +9,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Project navigation and selection action bars wrap on phones so Share, New Folder, Upload and bulk actions remain onscreen.
+
 - Share fields consistently distinguish Name (internal), Title (share-page heading), and Description without changing stored values.
 
 - Share links use compact mobile cards with asset names and previews; detail controls wrap, asset names remain readable, and touch inputs avoid focus zoom.
