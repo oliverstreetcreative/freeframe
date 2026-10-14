@@ -784,9 +784,10 @@ function LinkCreatedPhase({ result, allResults, onSelectResult, onDone, onAdvanc
           </div>
         )}
 
+        {urlCopyFailed && <p role="status" className="text-xs text-status-error mb-2">Copy failed. Select the URL and copy it manually.</p>}
         {/* Share URL + Visibility */}
         <div className="flex items-center gap-2 rounded-md border border-border bg-bg-tertiary px-3 py-2">
-          <span className="flex-1 truncate font-mono text-xs text-text-primary">{shareUrl}</span>
+          <input aria-label="Share URL" readOnly value={shareUrl} onFocus={(e) => e.currentTarget.select()} className="flex-1 min-w-0 bg-transparent font-mono text-xs text-text-primary" />
           <button
             onClick={async () => {
               if (await copyToClipboard(shareUrl)) {
@@ -1192,6 +1193,12 @@ export function ShareCreateDialog({
         await api.patch(`/share/${shareLink.token}`, patches)
       }
 
+      const result: CreatedShareResult = {
+        token: shareLink.token, title: shareLink.title, itemType, thumbnailUrl: thumbUrl,
+        assetId: shareLink.asset_id, folderId: shareLink.folder_id, projectId: shareLink.project_id,
+      }
+      setCreatedResult(result)
+      setPhase('result')
       onShareCreated()
 
       // OSC 0019: apply the kind's preset + the internal label. A 409 is the slate guard.
@@ -1210,7 +1217,7 @@ export function ShareCreateDialog({
         })
         return
       }
-      onOpenChange(false)
+      // Keep the URL visible until the user chooses Done.
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to create share link')
     } finally {
@@ -1236,7 +1243,7 @@ export function ShareCreateDialog({
       onShareCreated()
       if (out.ok) {
         setMetaBlock(null)
-        onOpenChange(false)
+        setPhase('result')
       } else {
         setMetaBlock({ ...metaBlock, status: out.status, detail: out.detail, slated: out.slated })
       }
@@ -1296,8 +1303,8 @@ export function ShareCreateDialog({
                       You can set them on the link&apos;s settings page.
                     </p>
                     <div className="flex justify-end">
-                      <Button size="sm" onClick={() => { setMetaBlock(null); onOpenChange(false) }}>
-                        Close
+                      <Button size="sm" onClick={() => { setMetaBlock(null); setPhase('result') }}>
+                        View created link
                       </Button>
                     </div>
                   </>
