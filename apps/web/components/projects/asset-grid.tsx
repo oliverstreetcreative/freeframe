@@ -224,14 +224,14 @@ export function AssetGrid({
   }
 
   return (
-    <div className="flex flex-col gap-3 relative">
+    <div className="flex min-w-0 flex-col gap-3 relative">
       {/* ─── Share Selection Mode Bar ──────────────────────────────────── */}
       {shareMode && (
-        <div className="flex items-center justify-between rounded-lg border border-accent/30 bg-accent/5 px-4 py-2.5">
+        <div className="flex flex-wrap items-center gap-2 justify-between rounded-lg border border-accent/30 bg-accent/5 px-4 py-2.5">
           <span className="text-sm font-medium text-text-primary">
             Select items to share
           </span>
-          <div className="flex items-center gap-2">
+          <div className="flex min-w-0 flex-wrap items-center gap-2">
             <Button
               variant="secondary"
               size="sm"
@@ -259,7 +259,7 @@ export function AssetGrid({
 
       {/* ─── Navigator Bar (Frame.io style) ─────────────────────────────── */}
       {!shareMode && (
-        <div className="flex items-center gap-1 border-b border-border pb-2.5">
+        <div className="flex min-w-0 flex-wrap items-center gap-2 border-b border-border pb-2.5">
           {/* Left group: Appearance + Fields + Sort */}
           <AppearancePopover />
 
@@ -271,7 +271,7 @@ export function AssetGrid({
 
           {/* Right group: action buttons passed from parent */}
           {actions && (
-            <div className="flex items-center gap-2">
+            <div className="flex w-full min-w-0 flex-wrap items-center gap-2 sm:w-auto">
               {actions}
             </div>
           )}
@@ -660,7 +660,7 @@ export function AssetGrid({
 
       {/* Bottom selection action bar (Frame.io style) */}
       {!shareMode && totalSelected > 0 && (
-        <div className="sticky bottom-0 z-20 flex items-center gap-3 rounded-lg border border-border bg-bg-elevated px-4 py-2.5 shadow-xl">
+        <div className="sticky bottom-0 z-20 flex min-w-0 flex-wrap items-center gap-3 rounded-lg border border-border bg-bg-elevated px-4 py-2.5 shadow-xl">
           <button onClick={clearSelection} className="text-text-tertiary hover:text-text-primary transition-colors">
             <X className="h-4 w-4" />
           </button>
