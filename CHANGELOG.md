@@ -314,6 +314,8 @@ Thank you to @jdanna, @Lennart-Pingpong and @sb123sb123 for the pull requests in
 
 ### Fixed
 
+- Project navigation and selection action bars wrap on phones so Share, New Folder, Upload and bulk actions remain onscreen.
+
 - Share fields consistently distinguish Name (internal), Title (share-page heading), and Description without changing stored values.
 
 - Share links use compact mobile cards with asset names and previews; detail controls wrap, asset names remain readable, and touch inputs avoid focus zoom.

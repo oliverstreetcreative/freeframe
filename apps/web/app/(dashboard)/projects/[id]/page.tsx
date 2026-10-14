@@ -1002,7 +1002,7 @@ export default function ProjectDetailPage() {
                   )}
                   {canCreateFolder && (
                     <button
-                      className="flex items-center gap-1.5 h-8 px-3 rounded-lg border border-border text-text-secondary hover:text-text-primary hover:bg-bg-hover text-[13px] transition-colors"
+                      className="flex shrink-0 items-center gap-1.5 h-8 px-3 rounded-lg border border-border whitespace-nowrap text-text-secondary hover:text-text-primary hover:bg-bg-hover text-[13px] transition-colors"
                       onClick={() => {
                         setFolderDialogParentId(currentFolderId);
                         setFolderDialogOpen(true);
