@@ -1,0 +1,14 @@
+OSC 0015: Review shows OUR version number (from the file name / slate), not the upload count
+
+Sam 10/5: "Review v11 = our v10 ... Sam must never translate." FreeFrame
+numbers versions by upload order; OSC numbers by review round, and the
+render's file name + slate carry it (`..._SP_v10.mov`). Versions now carry
+`osc_label` ("v10", "v9 wip2"), read from the uploaded file name
+(services/osc_version_label, AssetVersion.osc_label property), on the
+signed-in and share version responses. The web shows it everywhere a
+version is labelled: version switcher (an older upload with the same vN
+says "earlier upload"), asset info panel, project sidebar, list view,
+compare picker and badges. No vN in the file name -> upload count, as
+before. Stacks are not renumbered.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>

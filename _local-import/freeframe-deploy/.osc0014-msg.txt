@@ -1,0 +1,11 @@
+OSC 0014: share-link downloads hand over the uploaded master (client delivery)
+
+Sam 10/4: the client's share link + download of the approved version
+without slate should happen on our own Review site. Upstream serves the MP4
+remuxed from the top HLS rung on every download; for a delivery that is a
+re-encode at web quality. A share-link download now serves the uploaded
+file (the delivery master), named after the asset. OSC_SHARE_DOWNLOAD=mp4
+restores upstream. Downloads stay off unless the link allows them, and each
+one is logged as `downloaded` in the link's activity.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>

@@ -1,0 +1,152 @@
+diff --git a/apps/api/routers/comments.py b/apps/api/routers/comments.py
+index eda6340..3a65278 100644
+--- a/apps/api/routers/comments.py
++++ b/apps/api/routers/comments.py
+@@ -790,7 +790,7 @@ def export_comments(
+     format: str = Query(...),
+     version_id: Optional[uuid.UUID] = Query(default=None),
+     fps: Optional[float] = Query(default=None, gt=0),
+-    start_tc: str = Query(default="01:00:00:00"),
++    start_tc: Optional[str] = Query(default=None),
+     include_resolved: bool = Query(default=True),
+     db: Session = Depends(get_db),
+     current_user: User = Depends(get_current_user),
+@@ -849,6 +849,11 @@ def export_comments(
+                        + ", ".join(str(round(s.fps, 3)) for s in comment_export.FPS_TABLE),
+             )
+         if format == "edl":
++            # OSC: no ?start_tc= (the web UI never sends one) -> the source's own embedded start
++            # timecode (OSC renders start 00:59:55:00), else upstream's 01:00:00:00.
++            if start_tc is None:
++                from ..services.osc_timecode import probe_start_tc
++                start_tc = probe_start_tc(media_file.s3_key_raw if media_file else None) or "01:00:00:00"
+             if not _START_TC_RE.match(start_tc):
+                 raise HTTPException(status_code=422, detail="start_tc must be HH:MM:SS:FF")
+             hh, mm, ss, ff = (int(p) for p in re.split(r"[:;]", start_tc))
+diff --git a/apps/api/services/osc_timecode.py b/apps/api/services/osc_timecode.py
+new file mode 100644
+index 0000000..1065bde
+--- /dev/null
++++ b/apps/api/services/osc_timecode.py
+@@ -0,0 +1,36 @@
++"""OSC: a version's embedded start timecode, for NLE marker export.
++
++FreeFrame's Resolve EDL export assumed every timeline starts at 01:00:00:00, and the web UI never
++sends ?start_tc=. OSC renders start at 00:59:55:00 (a 5 s slate pre-roll before the 01:00:00:00
++program), so every exported marker landed 5 s late in Resolve. The source .mov carries its start
++timecode in a `timecode` tag; this reads it (header only: ffprobe never decodes) so the export can
++default to it.
++"""
++import re
++import subprocess
++from typing import Optional
++
++from ..config import settings
++from .s3_service import get_s3_client
++
++_TC = re.compile(r"^\d{2}:\d{2}:\d{2}[:;]\d{2}$")
++
++
++def probe_start_tc(s3_key_raw) -> Optional[str]:
++    """'HH:MM:SS:FF' (';' before FF for drop-frame) from the original upload, or None."""
++    if not isinstance(s3_key_raw, str) or not s3_key_raw:
++        return None
++    try:
++        url = get_s3_client().generate_presigned_url(
++            "get_object", Params={"Bucket": settings.s3_bucket, "Key": s3_key_raw}, ExpiresIn=300)
++        out = subprocess.run(
++            ["ffprobe", "-v", "error", "-show_entries", "format_tags=timecode:stream_tags=timecode",
++             "-of", "default=nw=1:nk=1", url],
++            capture_output=True, text=True, timeout=20).stdout
++    except Exception:
++        return None
++    for line in out.splitlines():
++        line = line.strip()
++        if _TC.match(line):
++            return line
++    return None
+diff --git a/apps/api/tests/test_osc_timecode.py b/apps/api/tests/test_osc_timecode.py
+new file mode 100644
+index 0000000..7854d2e
+--- /dev/null
++++ b/apps/api/tests/test_osc_timecode.py
+@@ -0,0 +1,79 @@
++"""OSC: Resolve EDL export defaults to the source's own start timecode.
++
++OSC renders start at 00:59:55:00 (5 s slate before the 01:00:00:00 program). FreeFrame assumed
++01:00:00:00 and the UI never sends ?start_tc=, so every marker landed 5 s late in Resolve.
++"""
++import uuid
++from datetime import datetime, timezone
++from types import SimpleNamespace
++from unittest.mock import MagicMock, patch
++
++import pytest
++
++from apps.api.models.asset import AssetType, ProcessingStatus
++from apps.api.services import osc_timecode
++
++
++@pytest.fixture(autouse=True)
++def _staff():
++    with patch("apps.api.routers.comments.is_staff", return_value=True):
++        yield
++
++
++def _rows(fps=25.0):
++    asset = MagicMock(id=uuid.uuid4(), asset_type=AssetType.video, deleted_at=None)
++    asset.name = "Spot"
++    version = MagicMock(id=uuid.uuid4(), version_number=4, processing_status=ProcessingStatus.ready, deleted_at=None)
++    media = MagicMock(fps=fps, duration_seconds=58.7, s3_key_raw="raw/p/a/v/original.mov")
++    c = MagicMock(id=uuid.uuid4(), parent_id=None, author_id=None, guest_author_id=None, body="Fix logo",
++                  timecode_start=2.52, timecode_end=None, resolved=False,
++                  created_at=datetime(2026, 10, 3, tzinfo=timezone.utc), visibility="public")
++    return asset, version, media, c
++
++
++@patch("apps.api.routers.comments.require_asset_access")
++def test_edl_uses_the_source_start_timecode_when_none_is_given(_, client, mock_db, auth_headers):
++    asset, version, media, c = _rows()
++    mock_db.first.side_effect = [asset, version, media]
++    mock_db.order_by.return_value = mock_db
++    mock_db.all.side_effect = [[c]]
++    with patch("apps.api.services.osc_timecode.probe_start_tc", return_value="00:59:55:00"):
++        r = client.get(f"/assets/{asset.id}/comments/export?format=edl&version_id={version.id}", headers=auth_headers)
++    assert r.status_code == 200
++    # 2.52 s at 25 fps = frame 63 -> 00:59:55:00 + 63 frames = 00:59:57:13 (not 01:00:02:13)
++    assert "00:59:57:13" in r.text and "01:00:02:13" not in r.text
++
++
++@patch("apps.api.routers.comments.require_asset_access")
++def test_an_explicit_start_tc_still_wins(_, client, mock_db, auth_headers):
++    asset, version, media, c = _rows()
++    mock_db.first.side_effect = [asset, version, media]
++    mock_db.order_by.return_value = mock_db
++    mock_db.all.side_effect = [[c]]
++    with patch("apps.api.services.osc_timecode.probe_start_tc", return_value="00:59:55:00") as p:
++        r = client.get(f"/assets/{asset.id}/comments/export?format=edl&version_id={version.id}&start_tc=01:00:00:00",
++                       headers=auth_headers)
++    assert r.status_code == 200 and "01:00:02:13" in r.text
++    p.assert_not_called()
++
++
++@patch("apps.api.routers.comments.require_asset_access")
++def test_no_source_timecode_falls_back_to_one_hour(_, client, mock_db, auth_headers):
++    asset, version, media, c = _rows()
++    mock_db.first.side_effect = [asset, version, media]
++    mock_db.order_by.return_value = mock_db
++    mock_db.all.side_effect = [[c]]
++    with patch("apps.api.services.osc_timecode.probe_start_tc", return_value=None):
++        r = client.get(f"/assets/{asset.id}/comments/export?format=edl&version_id={version.id}", headers=auth_headers)
++    assert r.status_code == 200 and "01:00:02:13" in r.text
++
++
++def test_probe_parses_ffprobe_and_ignores_junk(monkeypatch):
++    monkeypatch.setattr(osc_timecode, "get_s3_client",
++                        lambda: SimpleNamespace(generate_presigned_url=lambda *a, **k: "http://x/o.mov"))
++    monkeypatch.setattr(osc_timecode.subprocess, "run",
++                        lambda *a, **k: SimpleNamespace(stdout="\n00:59:55:00\n00:59:55:00\n"))
++    assert osc_timecode.probe_start_tc("raw/k.mov") == "00:59:55:00"
++    monkeypatch.setattr(osc_timecode.subprocess, "run", lambda *a, **k: SimpleNamespace(stdout="garbage\n"))
++    assert osc_timecode.probe_start_tc("raw/k.mov") is None
++    assert osc_timecode.probe_start_tc(None) is None

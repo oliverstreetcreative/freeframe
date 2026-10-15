@@ -1,0 +1,11 @@
+OSC 0020: the recipient's share page shows the link's kind (Review / Delivery)
+
+Sam 10/8 19:05: "I want review links and delivery links. It should be clear
+which type is which." 0019 badged Sam's link list; this badges the
+recipient's side too. Public GET /share/{token}/osc-kind returns only the
+kind (stored, else inferred), behind the same session/password check as the
+other public share endpoints; the internal label never leaves the staff
+API. ShareKindBadge sits next to the title on single-asset and folder /
+multi-item share pages; it renders nothing if the kind can't be read.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>

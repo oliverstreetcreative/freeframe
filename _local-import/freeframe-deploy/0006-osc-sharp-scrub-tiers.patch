@@ -1,0 +1,291 @@
+diff --git a/apps/api/routers/osc_storyboard.py b/apps/api/routers/osc_storyboard.py
+index 7a6482f..4f395e6 100644
+--- a/apps/api/routers/osc_storyboard.py
++++ b/apps/api/routers/osc_storyboard.py
+@@ -52,7 +52,12 @@ def get_storyboard(asset_id: uuid.UUID, version_id: Optional[uuid.UUID] = Query(
+         meta = json.loads(get_s3_client().get_object(Bucket=settings.s3_bucket, Key=k["json"])["Body"].read())
+     except Exception:
+         raise HTTPException(404, "No storyboard for this version")
+-    return {"version_id": str(v.id), "meta": meta, "url": generate_presigned_get_url(k["jpg"], expires_in=6 * 3600)}
++    from packages.transcoder.osc_sprite import tier_keys
++    tiers = [{**t, "urls": [generate_presigned_get_url(key, expires_in=6 * 3600)
++                            for key in tier_keys(str(v.id), t["w"], t["sheets"])]}
++             for t in meta.get("tiers", [])]
++    return {"version_id": str(v.id), "meta": meta, "tiers": tiers,
++            "url": generate_presigned_get_url(k["jpg"], expires_in=6 * 3600)}
+ 
+ 
+ @router.post("/assets/{asset_id}/storyboard")
+diff --git a/apps/api/tests/test_osc_sprite.py b/apps/api/tests/test_osc_sprite.py
+index 2e00a2c..b00b6d2 100644
+--- a/apps/api/tests/test_osc_sprite.py
++++ b/apps/api/tests/test_osc_sprite.py
+@@ -7,6 +7,20 @@ def test_keys_are_per_version():
+     assert k == {"jpg": "osc/sprites/abc.jpg", "json": "osc/sprites/abc.json", "vtt": "osc/sprites/abc.vtt"}
+ 
+ 
++def test_sharp_tiers_cover_dpr3_and_stay_under_ios_decode_limits():
++    widths = sorted(w for w, _, _ in s.TIERS)
++    assert widths[-1] >= 350 * 3          # a ~350-CSS-px phone card at DPR 3
++    assert any(w >= 160 * 3 for w in widths)  # the 160-CSS seek tooltip at DPR 3
++    for w, cols, rows in s.TIERS:
++        h = round(w * 9 / 16)
++        assert (w * cols) * (h * rows) <= 10.6e6, (w, cols, rows)
++
++
++def test_tier_keys_are_per_version_and_numbered():
++    assert s.tier_keys("v1", 1080, 3) == [
++        "osc/sprites/v1/t1080_001.jpg", "osc/sprites/v1/t1080_002.jpg", "osc/sprites/v1/t1080_003.jpg"]
++
++
+ def test_build_refuses_no_duration(tmp_path):
+     assert s.build("u", 0, 1920, 1080, str(tmp_path)) is None
+ 
+diff --git a/apps/web/components/osc/scrub.tsx b/apps/web/components/osc/scrub.tsx
+index d90344c..d228398 100644
+--- a/apps/web/components/osc/scrub.tsx
++++ b/apps/web/components/osc/scrub.tsx
+@@ -15,11 +15,13 @@ import { api } from '@/lib/api'
+ export interface StoryboardMeta {
+   count: number; cols: number; rows: number; tile_w: number; tile_h: number; interval: number; duration: number
+ }
+-export interface Storyboard { url: string; meta: StoryboardMeta }
++/** A sharp tier (Sam 10/3 00:40, iPhone "really fuzzy"): tiles >= CSS size x DPR, split into sheets. */
++export interface StoryboardTier { w: number; h: number; cols: number; rows: number; per_sheet: number; sheets: number; urls: string[] }
++export interface Storyboard { url: string; meta: StoryboardMeta; tiers: StoryboardTier[] }
+ 
+ const cache = new Map<string, Promise<Storyboard | null>>()
+ 
+-/** Fetch + preload + decode, once per asset (newest version). null = none available. */
++/** Fetch + preload + decode the small sheet, once per asset (newest version). null = none available. */
+ export function loadStoryboard(assetId: string): Promise<Storyboard | null> {
+   let p = cache.get(assetId)
+   // Share-link guests have no session; the storyboard route is staff/member-only. Don't even ask
+@@ -28,12 +30,12 @@ export function loadStoryboard(assetId: string): Promise<Storyboard | null> {
+   try { signedIn = !!localStorage.getItem('ff_access_token') } catch {}
+   if (!signedIn) return Promise.resolve(null)
+   if (!p) {
+-    p = api.get<{ url: string; meta: StoryboardMeta }>(`/assets/${assetId}/storyboard`)
++    p = api.get<{ url: string; meta: StoryboardMeta; tiers?: StoryboardTier[] }>(`/assets/${assetId}/storyboard`)
+       .then(async (r) => {
+         const img = new Image()
+         img.src = r.url
+         try { await img.decode() } catch { /* still usable once loaded */ }
+-        return { url: r.url, meta: r.meta }
++        return { url: r.url, meta: r.meta, tiers: r.tiers ?? [] }
+       })
+       .catch(() => null)
+     cache.set(assetId, p)
+@@ -51,11 +53,74 @@ export function useStoryboard(assetId: string | undefined, eager = false) {
+   return { sb, want }
+ }
+ 
+-/** The tile for frame `i`, scaled to fill a box of the tile's aspect. */
+-export function tileStyle(sb: Storyboard, i: number): React.CSSProperties {
+-  const { cols, rows, count } = sb.meta
+-  const idx = Math.max(0, Math.min(count - 1, i))
+-  const c = idx % cols, r = Math.floor(idx / cols)
++// ---- sharp sheets: decoded in the background, swapped in per frame as each sheet lands ----------
++const decoded = new Set<string>()
++const pending = new Set<string>()
++const sheetListeners = new Set<() => void>()
++let sheetVersion = 0
++
++function decodeSheet(url: string) {
++  if (decoded.has(url) || pending.has(url)) return
++  pending.add(url)
++  const img = new Image()
++  img.src = url
++  img.decode().catch(() => undefined).then(() => {
++    pending.delete(url)
++    decoded.add(url)
++    sheetVersion++
++    sheetListeners.forEach((l) => l())
++  })
++}
++
++/** Smallest tier whose tiles cover `needPx` device pixels; else the biggest there is. */
++export function pickTier(sb: Storyboard, needPx: number): StoryboardTier | null {
++  if (!sb.tiers?.length || needPx <= sb.meta.tile_w) return null
++  const sorted = [...sb.tiers].sort((a, b) => a.w - b.w)
++  return sorted.find((t) => t.w >= needPx) ?? sorted[sorted.length - 1]
++}
++
++/**
++ * Start decoding the tier that `needPx` (CSS width x devicePixelRatio) calls for, and re-render as
++ * its sheets land. The sheet holding `nearIdx` goes first, so the frame under the finger sharpens first.
++ */
++export function useSharpTier(sb: Storyboard | null, needPx: number, nearIdx = 0): StoryboardTier | null {
++  const tier = sb ? pickTier(sb, needPx) : null
++  React.useSyncExternalStore(
++    (l) => { sheetListeners.add(l); return () => { sheetListeners.delete(l) } },
++    () => sheetVersion,
++    () => sheetVersion,
++  )
++  const firstSheet = tier ? Math.min(tier.sheets - 1, Math.floor(Math.max(0, nearIdx) / tier.per_sheet)) : 0
++  React.useEffect(() => {
++    if (!tier) return
++    decodeSheet(tier.urls[firstSheet])
++    tier.urls.forEach((u) => decodeSheet(u))
++  }, [tier, firstSheet])
++  return tier
++}
++
++/** The tile for frame `i`, scaled to fill a box of the tile's aspect. Uses the sharp tier's sheet
++ *  for that frame once it's decoded, else the small 160 px sheet (instant). */
++export function tileStyle(sb: Storyboard, i: number, tier?: StoryboardTier | null): React.CSSProperties {
++  const idx = Math.max(0, Math.min(sb.meta.count - 1, i))
++  if (tier) {
++    const s = Math.floor(idx / tier.per_sheet)
++    const url = tier.urls[s]
++    if (url && decoded.has(url)) {
++      const j = idx % tier.per_sheet
++      const c = j % tier.cols
++      const r = Math.floor(j / tier.cols)
++      return {
++        backgroundImage: `url("${url}")`,
++        backgroundSize: `${tier.cols * 100}% ${tier.rows * 100}%`,
++        backgroundPosition: `${tier.cols > 1 ? (c / (tier.cols - 1)) * 100 : 0}% ${tier.rows > 1 ? (r / (tier.rows - 1)) * 100 : 0}%`,
++        backgroundRepeat: 'no-repeat',
++      }
++    }
++  }
++  const { cols, rows } = sb.meta
++  const c = idx % cols
++  const r = Math.floor(idx / cols)
+   return {
+     backgroundImage: `url("${sb.url}")`,
+     backgroundSize: `${cols * 100}% ${rows * 100}%`,
+@@ -64,6 +129,10 @@ export function tileStyle(sb: Storyboard, i: number): React.CSSProperties {
+   }
+ }
+ 
++export function dpr(): number {
++  return typeof window !== 'undefined' ? window.devicePixelRatio || 1 : 1
++}
++
+ export function indexAtTime(sb: Storyboard, t: number): number {
+   return Math.floor(t / (sb.meta.interval || 1))
+ }
+@@ -155,6 +224,14 @@ export function ScrubOverlay({ assetId }: { assetId: string }) {
+ 
+   const active = sb && frac !== null
+   const idx = sb && frac !== null ? Math.floor(frac * sb.meta.count) : 0
++  // tiles must be >= this card's CSS width x devicePixelRatio to look sharp (3x on iPhone)
++  const [needPx, setNeedPx] = React.useState(0)
++  React.useEffect(() => {
++    const el = ref.current
++    if (!el || !sb) return
++    setNeedPx(Math.ceil(el.getBoundingClientRect().width * dpr()))
++  }, [sb])
++  const tier = useSharpTier(sb, needPx, idx)
+   return (
+     <div
+       ref={ref}
+@@ -165,11 +242,12 @@ export function ScrubOverlay({ assetId }: { assetId: string }) {
+       onPointerMove={onMove}
+       data-osc-scrub={active ? idx : undefined}
+       data-osc-scrub-ready={sb ? 'yes' : 'no'}
++      data-osc-scrub-tier={tier ? tier.w : sb ? sb.meta.tile_w : undefined}
+     >
+       {active && (
+         <>
+           <div className="absolute inset-0 flex items-center justify-center bg-black pointer-events-none">
+-            <div className="w-full" style={{ aspectRatio: `${sb!.meta.tile_w} / ${sb!.meta.tile_h}`, ...tileStyle(sb!, idx) }} />
++            <div className="w-full" style={{ aspectRatio: `${sb!.meta.tile_w} / ${sb!.meta.tile_h}`, ...tileStyle(sb!, idx, tier) }} />
+           </div>
+           <div className="absolute left-0 bottom-0 h-[3px] bg-accent pointer-events-none"
+                style={{ width: `${((idx + 1) / sb!.meta.count) * 100}%` }} />
+diff --git a/apps/web/components/review/progress-bar.tsx b/apps/web/components/review/progress-bar.tsx
+index 7416cdb..fd52fae 100644
+--- a/apps/web/components/review/progress-bar.tsx
++++ b/apps/web/components/review/progress-bar.tsx
+@@ -1,7 +1,7 @@
+ 'use client'
+ 
+ import React, { useCallback, useEffect, useRef, useState } from 'react'
+-import { useStoryboard, tileStyle, indexAtTime } from '@/components/osc/scrub'
++import { useStoryboard, tileStyle, indexAtTime, useSharpTier, dpr } from '@/components/osc/scrub'
+ import { createPortal } from 'react-dom'
+ import Hls from 'hls.js'
+ import { cn, formatTimecode } from '@/lib/utils'
+@@ -285,6 +285,8 @@ export function ProgressBar({
+ }: ProgressBarProps) {
+   // OSC: sprite previews when a storyboard exists (loaded eagerly, it's one image)
+   const { sb: storyboard } = useStoryboard(storyboardAssetId, true)
++  // the preview box is 160 CSS px wide (w-40): sharp at 160 x devicePixelRatio
++  const seekTier = useSharpTier(storyboard, Math.ceil(160 * dpr()))
+   const trackRef = useRef<HTMLDivElement>(null)
+   const activePointerIdRef = useRef<number | null>(null)
+   const [isDragging, setIsDragging] = useState(false)
+@@ -520,7 +522,7 @@ export function ProgressBar({
+             <div className="mb-1 rounded-md overflow-hidden border border-white/15 shadow-2xl bg-black w-40"
+                  data-osc-seek-preview="sprite">
+               <div className="w-full" style={{ aspectRatio: `${storyboard.meta.tile_w} / ${storyboard.meta.tile_h}`,
+-                ...tileStyle(storyboard, indexAtTime(storyboard, hoverTime)) }} />
++                ...tileStyle(storyboard, indexAtTime(storyboard, hoverTime), seekTier) }} />
+             </div>
+           ) : previewImage && (
+             <div className="mb-1 rounded-md overflow-hidden border border-white/15 shadow-2xl">
+diff --git a/packages/transcoder/osc_sprite.py b/packages/transcoder/osc_sprite.py
+index 540d7af..f752866 100644
+--- a/packages/transcoder/osc_sprite.py
++++ b/packages/transcoder/osc_sprite.py
+@@ -54,6 +54,36 @@ def build(input_url: str, duration: float, width: int, height: int, work_dir: st
+     return {"jpg": out, "meta": meta, "vtt": vtt(meta, "osc_sprite.jpg")}
+ 
+ 
++# Sharp tiers (Sam 10/3 00:40 "it's really fuzzy" on iPhone): tile width >= CSS size x DPR.
++#   480 px: desktop retina grid cards (~220 CSS x 2) and the 160-CSS seek tooltip at DPR 3
++#   1080 px: phone cards (~350 CSS x 3)
++# Each tier is split into sheets of cols x rows tiles, kept under ~10.5 MP so iOS decodes them.
++TIERS = [(480, 8, 8), (1080, 4, 4)]
++TIER_Q = "4"  # ffmpeg mjpeg -q:v 4 ~ JPEG q80
++
++
++def tier_keys(version_id: str, w: int, n: int) -> list[str]:
++    return [f"osc/sprites/{version_id}/t{w}_{i:03d}.jpg" for i in range(1, n + 1)]
++
++
++def build_tier(input_url: str, count: int, duration: float, aspect: float, w: int, cols: int, rows: int,
++               work_dir: str) -> Optional[dict]:
++    h = max(2, int(round(w * aspect / 2)) * 2)
++    pattern = os.path.join(work_dir, f"t{w}_%03d.jpg")
++    vf = (f"fps={count}/{duration:.6f},scale={w}:{h}:force_original_aspect_ratio=decrease,"
++          f"pad={w}:{h}:(ow-iw)/2:(oh-ih)/2,tile={cols}x{rows}")
++    cmd = ["ffmpeg", "-y", "-v", "error", "-i", input_url, "-an", "-vf", vf, "-q:v", TIER_Q, pattern]
++    try:
++        r = subprocess.run(cmd, capture_output=True, timeout=1800)
++    except Exception:
++        return None
++    files = sorted(p for p in os.listdir(work_dir) if p.startswith(f"t{w}_") and p.endswith(".jpg"))
++    if r.returncode != 0 or not files:
++        return None
++    return {"w": w, "h": h, "cols": cols, "rows": rows, "per_sheet": cols * rows,
++            "sheets": len(files), "files": [os.path.join(work_dir, p) for p in files]}
++
++
+ def _ts(s: float) -> str:
+     h, rem = divmod(s, 3600)
+     m, sec = divmod(rem, 60)
+@@ -82,6 +112,20 @@ def build_and_upload(s3, bucket: str, version_id: str, input_url: str, duration:
+     k = keys(version_id)
+     s3.upload_file(sp["jpg"], bucket, k["jpg"],
+                    ExtraArgs={"ContentType": "image/jpeg", "CacheControl": "max-age=31536000"})
++    # sharp tiers (best-effort: the 160 px sheet above already works on its own)
++    meta = sp["meta"]
++    aspect = (height / width) if (width and height) else 9 / 16
++    tiers = []
++    for w, cols, rows in TIERS:
++        tr = build_tier(input_url, meta["count"], duration, aspect, w, cols, rows, work_dir)
++        if not tr:
++            continue
++        for path, key in zip(tr["files"], tier_keys(version_id, w, tr["sheets"])):
++            s3.upload_file(path, bucket, key, ExtraArgs={"ContentType": "image/jpeg",
++                                                         "CacheControl": "max-age=31536000"})
++        tiers.append({x: tr[x] for x in ("w", "h", "cols", "rows", "per_sheet", "sheets")})
++    meta = {**meta, "v": 2, "tiers": tiers}
++    sp["meta"] = meta
+     s3.put_object(Bucket=bucket, Key=k["json"], Body=meta_json(sp["meta"]), ContentType="application/json")
+     s3.put_object(Bucket=bucket, Key=k["vtt"], Body=sp["vtt"].encode(), ContentType="text/vtt")
+     return sp["meta"]

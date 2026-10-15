@@ -1,0 +1,23 @@
+fix(share): replies on share links were silently dropped (#439)
+
+Frontend
+- share-review-screen: onSubmitReply goes through submitComment with
+  parent_id, then awaits refetchComments (the optimistic append only shows
+  top-level rows). It is passed only when the link can comment.
+- A guest with no identity yet is prompted first. The reply waits in its box
+  on a promise that settles after the name is given (or quietly on cancel).
+- comment-panel: Reply is offered only when there is a submit handler.
+  InlineReplyInput keeps the text and shows the error instead of swallowing it.
+- projects/[id]: the sidebar's dead reply box now posts via
+  useComments().createComment(..., parentId).
+
+Server
+- guest_comment: the parent must be a live, non-internal comment on the
+  link's asset (asset.id, not body.asset_id). Anything else is now a 400
+  (before: a 500, or accepted). The reply takes the parent's version, as
+  reply_to_comment does.
+- tests/test_share_comment_replies.py (real_db).
+
+CHANGELOG: Unreleased > Fixed.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>

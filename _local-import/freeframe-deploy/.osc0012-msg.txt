@@ -1,0 +1,9 @@
+OSC 0012: extra CORS_ALLOW_ORIGINS also get storage-bucket CORS rules
+
+The client portal (staging) embeds the Review player; hls.js fetches presigned
+segment URLs straight from the bucket, which only allowed FRONTEND_URL and
+localhost (and the startup write overwrites any hand-set rule). Each extra
+origin the API already trusts now gets its own bucket rule; "*" is never
+copied onto the bucket. tests/test_osc_bucket_cors.py.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>

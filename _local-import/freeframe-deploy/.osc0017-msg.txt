@@ -1,0 +1,10 @@
+OSC 0017: delivery links show no comments; no-history links only the served version's
+
+Sam 10/8: a final delivery link is "no comments, download only". A
+view-permission share link (our delivery profile) now returns no comments
+from GET /share/{token}/comments. A link with show_versions=false serves
+only the latest ready version, so its comment list is scoped to that
+version even when the caller passes another version_id; before, omitting
+version_id returned every version's public notes.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>

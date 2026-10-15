@@ -1,0 +1,68 @@
+diff --git a/apps/api/routers/osc_poster.py b/apps/api/routers/osc_poster.py
+index dfc5959..78d20a3 100644
+--- a/apps/api/routers/osc_poster.py
++++ b/apps/api/routers/osc_poster.py
+@@ -40,6 +40,29 @@ def _internal_url(key: str) -> str:
+         "get_object", Params={"Bucket": settings.s3_bucket, "Key": key}, ExpiresIn=900)
+ 
+ 
++@router.post("/assets/{asset_id}/retranscode")
++def retranscode(asset_id: uuid.UUID, version_id: Optional[uuid.UUID] = None, db: Session = Depends(get_db),
++                current_user: User = Depends(get_current_user)):
++    """OSC (staff): re-run the transcode for the newest (or given) version, e.g. after an encoder
++    setting changes (10/3: audio 128k -> 256k). The version shows `processing` until it finishes;
++    the original upload is untouched."""
++    from ..tasks.transcode_tasks import process_asset
++    from ..tasks.celery_app import send_task_safe
++    asset = db.query(Asset).filter(Asset.id == asset_id, Asset.deleted_at.is_(None)).first()
++    if not asset:
++        raise HTTPException(404, "Asset not found")
++    if not is_staff(db, asset.project_id, current_user):
++        raise HTTPException(403, "Only OSC staff can re-transcode")
++    q = db.query(AssetVersion).filter(AssetVersion.asset_id == asset_id, AssetVersion.deleted_at.is_(None),
++                                      AssetVersion.processing_status == ProcessingStatus.ready)
++    version = q.filter(AssetVersion.id == version_id).first() if version_id else \
++        q.order_by(AssetVersion.version_number.desc()).first()
++    if not version:
++        raise HTTPException(404, "No ready version")
++    send_task_safe(process_asset, str(asset.id), str(version.id))
++    return {"queued": True, "version_id": str(version.id)}
++
++
+ @router.post("/assets/{asset_id}/poster")
+ def set_poster(asset_id: uuid.UUID, body: PosterRequest, db: Session = Depends(get_db),
+                current_user: User = Depends(get_current_user)):
+diff --git a/packages/transcoder/ffmpeg_transcoder.py b/packages/transcoder/ffmpeg_transcoder.py
+index bdc34d2..1849ccb 100644
+--- a/packages/transcoder/ffmpeg_transcoder.py
++++ b/packages/transcoder/ffmpeg_transcoder.py
+@@ -249,6 +249,9 @@ QUALITY_MAP = {
+ # What a deployment gets without saying anything. Unchanged behaviour.
+ DEFAULT_QUALITIES = ("1080p", "720p", "360p")
+ 
++# OSC: AAC bitrate for every HLS rung (stereo, 48 kHz). Override with OSC_AUDIO_BITRATE.
++OSC_AUDIO_BITRATE = os.environ.get("OSC_AUDIO_BITRATE", "256k")
++
+ 
+ def rung_height(name: str) -> int:
+     """The vertical resolution a rung encodes to (QUALITY_MAP holds `w:h`)."""
+@@ -1343,7 +1346,7 @@ class FFmpegTranscoder(BaseTranscoder):
+                 if has_audio:
+                     cmd += (
+                         ["-c:a", "copy"] if audio_codec == "aac"
+-                        else ["-c:a", "aac", "-b:a", "192k"]
++                        else ["-c:a", "aac", "-b:a", OSC_AUDIO_BITRATE, "-ac", "2", "-ar", "48000"]
+                     )
+                 cmd += [
+                     "-f", "hls",
+@@ -1472,6 +1475,10 @@ class FFmpegTranscoder(BaseTranscoder):
+                     ffmpeg_cmd += ["-map", f"[{quality}]"]
+                     if has_audio:
+                         ffmpeg_cmd += ["-map", "a:0"]
++                        # OSC (Sam 10/3 00:45): explicit review-grade audio. Unset, ffmpeg's
++                        # native AAC fell back to ~128 kb/s; masters are 24-bit 48k stereo.
++                        ffmpeg_cmd += [f"-c:a:{i}", "aac", f"-b:a:{i}", OSC_AUDIO_BITRATE,
++                                       f"-ac:a:{i}", "2", f"-ar:a:{i}", "48000"]
+                     if backend == "cpu" or dv_software:
+                         enc = "libx265" if family == "hevc" else "libx264"
+                         ffmpeg_cmd += [f"-c:v:{i}", enc, "-preset", "fast",

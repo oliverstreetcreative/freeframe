@@ -1,0 +1,60 @@
+diff --git a/apps/web/components/review/progress-bar.tsx b/apps/web/components/review/progress-bar.tsx
+index fd52fae..a36f849 100644
+--- a/apps/web/components/review/progress-bar.tsx
++++ b/apps/web/components/review/progress-bar.tsx
+@@ -290,6 +290,8 @@ export function ProgressBar({
+   const trackRef = useRef<HTMLDivElement>(null)
+   const activePointerIdRef = useRef<number | null>(null)
+   const [isDragging, setIsDragging] = useState(false)
++  // OSC (Sam 10/3 00:50): preview on HOVER only. Touch has no hover, so never there.
++  const [pointerKind, setPointerKind] = useState<string>('mouse')
+   const [hoverTime, setHoverTime] = useState<number | null>(null)
+   const [hoverX, setHoverX] = useState(0)
+   const [hoveredCommentId, setHoveredCommentId] = useState<string | null>(null)
+@@ -328,6 +330,7 @@ export function ProgressBar({
+       // While dragging, only the pointer that started the drag may drive it —
+       // otherwise a second finger (e.g. a two-handed grip) would hijack the seek.
+       if (isDragging && e.pointerId !== activePointerIdRef.current) return
++      if (e.pointerType !== pointerKind) setPointerKind(e.pointerType)
+       const time = getTimeFromEvent(e.clientX)
+       setHoverTime(time)
+       const track = trackRef.current
+@@ -343,9 +346,10 @@ export function ProgressBar({
+       if (isDragging) {
+         onSeek(time)
+       }
+-      if (!storyboard) seekPreview(time)
++      // hover-only preview: no decoder work while dragging or on touch
++      if (!storyboard && !isDragging && e.pointerType !== 'touch') seekPreview(time)
+     },
+-    [isDragging, getTimeFromEvent, onSeek, seekPreview, storyboard],
++    [isDragging, getTimeFromEvent, onSeek, seekPreview, storyboard, pointerKind],
+   )
+ 
+   const handlePointerLeave = useCallback(() => {
+@@ -360,6 +364,7 @@ export function ProgressBar({
+       if (!e.isPrimary || e.button !== 0) return // ignore a secondary pointer or a non-primary button (e.g. right-click)
+       if (activePointerIdRef.current !== null) return // a drag is already in progress
+       activePointerIdRef.current = e.pointerId
++      if (e.pointerType !== pointerKind) setPointerKind(e.pointerType)
+       // Pointer capture keeps this element receiving move/up/cancel for this
+       // pointer even once it's dragged outside the track's own bounds, so no
+       // window-level listeners are needed for drag-outside-track. Optional
+@@ -374,7 +379,7 @@ export function ProgressBar({
+       setIsDragging(true)
+       onSeek(getTimeFromEvent(e.clientX))
+     },
+-    [getTimeFromEvent, onSeek],
++    [getTimeFromEvent, onSeek, pointerKind],
+   )
+ 
+   const handlePointerUp = useCallback(
+@@ -511,7 +516,7 @@ export function ProgressBar({
+       )}
+ 
+       {/* Frame preview + time tooltip on bar hover */}
+-      {hoverTime !== null && (
++      {hoverTime !== null && !isDragging && pointerKind !== 'touch' && (
+         <div
+           data-testid="progress-bar-hover-tooltip"
+           className="absolute -top-2 z-30 pointer-events-none"

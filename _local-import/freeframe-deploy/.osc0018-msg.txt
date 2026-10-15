@@ -1,0 +1,16 @@
+OSC 0018: fold delivery items into their deliverable's stack (merge repoints links); master keeps its name
+
+Sam 10/8 19:05: "I'm trying to avoid having separate assets for review and
+delivery. The final delivery file/version won't have a slate. That's the
+giveaway." One item per deliverable: slated review rounds, then the
+no-slate master as the TOP version.
+
+- /osc/admin/merge repoint_links: a source served by client links may be
+  merged if its links are repointed to the target (share_links.asset_id,
+  share_link_items, asset_shares) AND the stack's new top is byte-identical
+  (size + original name) to the file the links served; else 409. Checked in
+  the dry run too.
+- Share downloads are named after the master's own uploaded file name (the
+  delivery name), not the item, which is now named for the deliverable.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>

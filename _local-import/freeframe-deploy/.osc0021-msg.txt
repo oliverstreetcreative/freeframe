@@ -1,0 +1,13 @@
+OSC 0021: breadcrumb (and Back) navigate to the parent folder
+
+Sam 10/8: "When you try to click back the tree in the top left to a parent
+folder, it doesn't work." The project page read ?folder= once, as the
+initial value of its folder state. The header breadcrumb links to
+/projects/{id}?folder={parent} (the project crumb to /projects/{id}) on the
+same page, so Next kept it mounted and nothing changed; browser Back too.
+useUrlFolder follows ?folder= after the first render and the page resets
+to that folder (closing Trash / share-link views like the folder tree
+does). Upstream bug (same code on main). Test:
+hooks/__tests__/use-url-folder.test.ts.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>

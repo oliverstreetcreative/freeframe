@@ -1,0 +1,219 @@
+diff --git a/apps/web/app/(dashboard)/projects/[id]/assets/[assetId]/page.tsx b/apps/web/app/(dashboard)/projects/[id]/assets/[assetId]/page.tsx
+index ecfc5ad..7238b68 100644
+--- a/apps/web/app/(dashboard)/projects/[id]/assets/[assetId]/page.tsx
++++ b/apps/web/app/(dashboard)/projects/[id]/assets/[assetId]/page.tsx
+@@ -467,8 +467,14 @@ function ReviewScreenInner({ projectId }: { projectId: string }) {
+     />
+   )
+ 
++  // OSC (Sam 10/3 00:17 "internal by default"): staff = superadmin or project owner/editor.
++  const myRole = members?.find((m) => m.user_id === user?.id)?.role
++  // Until the member list arrives, assume staff (Internal): a slow load must never post public.
++  const isStaff = !!user?.is_superadmin || members === undefined || myRole === 'owner' || myRole === 'editor'
+   const commentInputNode = canComment ? (
+     <CommentInput
++      defaultVisibility={isStaff ? 'internal' : 'public'}
++      allowInternal={isStaff}
+       assetId={asset.id}
+       projectId={asset.project_id}
+       assetType={asset.asset_type}
+diff --git a/apps/web/components/osc/poster.tsx b/apps/web/components/osc/poster.tsx
+index e267fb1..cb8b39d 100644
+--- a/apps/web/components/osc/poster.tsx
++++ b/apps/web/components/osc/poster.tsx
+@@ -58,7 +58,8 @@ export function PosterMenu({ assetId, versionId }: { assetId: string; versionId?
+         <button type="button" title="Thumbnail (T = use this frame)" aria-label="Thumbnail options"
+           className="inline-flex items-center gap-1.5 rounded-md px-2.5 h-8 text-xs font-medium border border-border text-text-secondary hover:text-text-primary hover:bg-bg-hover transition-colors outline-none focus-visible:[box-shadow:0_0_0_2px_var(--bg-primary),0_0_0_4px_var(--accent)]">
+           {busy ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <ImageIcon className="h-3.5 w-3.5" />}
+-          Thumbnail
++          {/* icon-only on phones: the label pushed Version/Share off a 390 px top bar */}
++          <span className="hidden sm:inline">Thumbnail</span>
+         </button>
+       </DropdownMenu.Trigger>
+       <DropdownMenu.Portal>
+diff --git a/apps/web/components/osc/scrub.tsx b/apps/web/components/osc/scrub.tsx
+index 52a8918..d90344c 100644
+--- a/apps/web/components/osc/scrub.tsx
++++ b/apps/web/components/osc/scrub.tsx
+@@ -69,17 +69,86 @@ export function indexAtTime(sb: Storyboard, t: number): number {
+ }
+ 
+ /**
+- * Grid card overlay: sits over the thumbnail. Mouse: move across to scrub. Touch: drag across.
+- * Hover intent (90 ms) before loading, so sweeping the pointer over a grid doesn't fetch every card.
++ * Grid card overlay: sits over the thumbnail.
++ *  - Mouse: hover intent (90 ms) loads the sheet, then moving across scrubs.
++ *  - Touch (Sam 10/3 00:20, iPhone: "a flash of a frame change, but that's it"): pointer events
++ *    got cancelled the moment Safari claimed the gesture for scrolling, and the sheet only started
++ *    loading on that first touch. Now: the sheet PRELOADS when the card scrolls into view on a
++ *    touch device; touch is handled with native touchstart/touchmove (passive: false) and a
++ *    direction lock: a horizontal drag scrubs (preventDefault, so the page doesn't scroll) and
++ *    the frames follow the finger continuously; a vertical drag is left alone, so the page scrolls.
++ *    A tap (no drag) still opens the asset.
+  */
++const isCoarse = () => typeof window !== 'undefined' && !!window.matchMedia?.('(pointer: coarse)').matches
++
+ export function ScrubOverlay({ assetId }: { assetId: string }) {
+   const { sb, want } = useStoryboard(assetId)
+   const [frac, setFrac] = React.useState<number | null>(null)
+   const timer = React.useRef<ReturnType<typeof setTimeout> | null>(null)
++  const ref = React.useRef<HTMLDivElement>(null)
++
++  // Touch devices: load before the first touch, as the card comes into view.
++  React.useEffect(() => {
++    const el = ref.current
++    if (!el || !isCoarse() || typeof IntersectionObserver === 'undefined') return
++    const io = new IntersectionObserver((entries) => {
++      if (entries.some((e) => e.isIntersecting)) { want(); io.disconnect() }
++    }, { rootMargin: '200px' })
++    io.observe(el)
++    return () => io.disconnect()
++  }, [want])
++
++  // Native touch listeners (React's touch handlers are passive, so they can't preventDefault).
++  React.useEffect(() => {
++    const el = ref.current
++    if (!el) return
++    let x0 = 0, y0 = 0, mode: 'none' | 'scrub' | 'scroll' = 'none'
++    const fracAt = (clientX: number) => {
++      const r = el.getBoundingClientRect()
++      return Math.max(0, Math.min(0.9999, (clientX - r.left) / r.width))
++    }
++    const start = (e: TouchEvent) => {
++      if (e.touches.length !== 1) { mode = 'scroll'; return }
++      x0 = e.touches[0].clientX; y0 = e.touches[0].clientY; mode = 'none'
++      want()
++    }
++    const move = (e: TouchEvent) => {
++      if (mode === 'scroll' || e.touches.length !== 1) return
++      const t = e.touches[0]
++      if (mode === 'none') {
++        const dx = Math.abs(t.clientX - x0), dy = Math.abs(t.clientY - y0)
++        if (dx < 6 && dy < 6) return
++        mode = dx > dy ? 'scrub' : 'scroll'
++        if (mode === 'scroll') return
++      }
++      e.preventDefault()          // we own this gesture: no page scroll, no click afterwards
++      setFrac(fracAt(t.clientX))
++    }
++    const end = () => { if (mode === 'scrub') setTimeout(() => setFrac(null), 600); mode = 'none' }
++    el.addEventListener('touchstart', start, { passive: true })
++    el.addEventListener('touchmove', move, { passive: false })
++    el.addEventListener('touchend', end)
++    el.addEventListener('touchcancel', end)
++    return () => {
++      el.removeEventListener('touchstart', start)
++      el.removeEventListener('touchmove', move)
++      el.removeEventListener('touchend', end)
++      el.removeEventListener('touchcancel', end)
++    }
++  }, [want])
+ 
+-  const onEnter = () => { timer.current = setTimeout(want, 90) }
+-  const onLeave = () => { if (timer.current) clearTimeout(timer.current); setFrac(null) }
++  // Mouse/pen only; touch is handled natively above.
++  const onEnter = (e: React.PointerEvent<HTMLDivElement>) => {
++    if (e.pointerType === 'touch') return
++    timer.current = setTimeout(want, 90)
++  }
++  const onLeave = (e: React.PointerEvent<HTMLDivElement>) => {
++    if (e.pointerType === 'touch') return
++    if (timer.current) clearTimeout(timer.current)
++    setFrac(null)
++  }
+   const onMove = (e: React.PointerEvent<HTMLDivElement>) => {
++    if (e.pointerType === 'touch') return
+     const r = e.currentTarget.getBoundingClientRect()
+     setFrac(Math.max(0, Math.min(0.9999, (e.clientX - r.left) / r.width)))
+   }
+@@ -88,13 +157,14 @@ export function ScrubOverlay({ assetId }: { assetId: string }) {
+   const idx = sb && frac !== null ? Math.floor(frac * sb.meta.count) : 0
+   return (
+     <div
++      ref={ref}
+       className="absolute inset-0"
+       style={{ touchAction: 'pan-y' }}
+       onPointerEnter={onEnter}
+       onPointerLeave={onLeave}
+       onPointerMove={onMove}
+-      onPointerDown={(e) => { if (e.pointerType === 'touch') want() }}
+       data-osc-scrub={active ? idx : undefined}
++      data-osc-scrub-ready={sb ? 'yes' : 'no'}
+     >
+       {active && (
+         <>
+diff --git a/apps/web/components/review/comment-input.tsx b/apps/web/components/review/comment-input.tsx
+index 44c5108..54a012b 100644
+--- a/apps/web/components/review/comment-input.tsx
++++ b/apps/web/components/review/comment-input.tsx
+@@ -61,6 +61,10 @@ interface CommentInputProps {
+   onToggleAnnotation?: () => void;
+   /** OSC: share-link views. Everything posted there is client-visible, so no Internal option. */
+   publicOnly?: boolean;
++  /** OSC (Sam 10/3 00:17): staff comments start as Internal. Undefined = public. */
++  defaultVisibility?: "public" | "internal";
++  /** OSC: hide the Internal option (non-staff; the server refuses it for them). */
++  allowInternal?: boolean;
+   className?: string;
+ }
+ 
+@@ -204,6 +208,8 @@ export function CommentInput({
+   annotationActive,
+   onToggleAnnotation,
+   publicOnly = false,
++  defaultVisibility,
++  allowInternal = true,
+   className,
+ }: CommentInputProps) {
+   const {
+@@ -241,7 +247,15 @@ export function CommentInput({
+   const [error, setError] = React.useState<string | null>(null);
+   const [commentVisibility, setCommentVisibility] = React.useState<
+     "public" | "internal"
+-  >("public");
++  >(defaultVisibility ?? "public");
++  // The staff/role check can resolve after mount: follow the default until the user picks.
++  const visTouchedRef = React.useRef(false);
++  React.useEffect(() => {
++    if (!visTouchedRef.current && defaultVisibility) setCommentVisibility(defaultVisibility);
++  }, [defaultVisibility]);
++  React.useEffect(() => {
++    if (!allowInternal) setCommentVisibility("public");
++  }, [allowInternal]);
+   const [visDropdownOpen, setVisDropdownOpen] = React.useState(false);
+   const [timecodeAttached, setTimecodeAttached] = React.useState(true);
+   const visRef = React.useRef<HTMLDivElement>(null);
+@@ -411,7 +425,7 @@ export function CommentInput({
+         undefined,
+         finalAnnotation,
+         replyToId ?? undefined,
+-        publicOnly ? "public" : commentVisibility,
++        publicOnly || !allowInternal ? "public" : commentVisibility,
+         mentionUserIds.length > 0 ? mentionUserIds : undefined,
+       );
+ 
+@@ -637,7 +651,7 @@ export function CommentInput({
+ 
+             <div className="flex items-center gap-2">
+               {/* Visibility: OSC says plainly who will see this before it posts */}
+-              {publicOnly ? (
++              {publicOnly || !allowInternal ? (
+                 <span
+                   data-osc-visibility="public-only"
+                   title="Everything posted on a share link is visible to the client"
+@@ -677,6 +691,7 @@ export function CommentInput({
+                           : "text-text-secondary hover:bg-bg-tertiary",
+                       )}
+                       onClick={() => {
++                        visTouchedRef.current = true;
+                         setCommentVisibility("public");
+                         setVisDropdownOpen(false);
+                       }}
+@@ -692,6 +707,7 @@ export function CommentInput({
+                           : "text-text-secondary hover:bg-bg-tertiary",
+                       )}
+                       onClick={() => {
++                        visTouchedRef.current = true;
+                         setCommentVisibility("internal");
+                         setVisDropdownOpen(false);
+                       }}

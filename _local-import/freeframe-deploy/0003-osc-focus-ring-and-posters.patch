@@ -1,0 +1,471 @@
+diff --git a/apps/api/main.py b/apps/api/main.py
+index f40e414..342ff6b 100644
+--- a/apps/api/main.py
++++ b/apps/api/main.py
+@@ -100,6 +100,8 @@ app.include_router(folders.router)
+ app.include_router(hls_proxy.router)
+ app.include_router(instance_settings.router)
+ app.include_router(instance_branding.router)
++from .routers import osc_poster  # OSC: set/shuffle a version's poster (grid thumbnail)
++app.include_router(osc_poster.router)
+ 
+ @app.get("/health")
+ def health():
+diff --git a/apps/api/routers/osc_poster.py b/apps/api/routers/osc_poster.py
+new file mode 100644
+index 0000000..dfc5959
+--- /dev/null
++++ b/apps/api/routers/osc_poster.py
+@@ -0,0 +1,95 @@
++"""OSC: set a version's poster (the grid thumbnail). Staff only.
++
++POST /assets/{asset_id}/poster  {"time": 12.4}            -> that frame (player hotkey T)
++POST /assets/{asset_id}/poster  {"random": true}          -> a fresh random good frame (Shuffle)
++optional "version_id" (default: the newest ready version).
++
++Grabs from the ORIGINAL upload over the internal S3 endpoint, writes a NEW key each time (so no
++browser/CDN cache can show the old frame), points media_file.s3_key_thumbnail at it, and deletes
++the previous OSC-made poster (never upstream's own thumbnail.jpg).
++"""
++import os
++import tempfile
++import time as _time
++import uuid
++from typing import Optional
++
++from fastapi import APIRouter, Depends, HTTPException
++from pydantic import BaseModel
++from sqlalchemy.orm import Session
++
++from ..database import get_db
++from ..middleware.auth import get_current_user
++from ..models.asset import Asset, AssetVersion, MediaFile, ProcessingStatus, AssetType
++from ..models.user import User
++from ..services.osc_visibility import is_staff
++from ..services.s3_service import get_s3_client, generate_presigned_get_url, put_object, delete_object
++from ..config import settings
++
++router = APIRouter(tags=["osc_poster"])
++
++
++class PosterRequest(BaseModel):
++    version_id: Optional[uuid.UUID] = None
++    time: Optional[float] = None
++    random: bool = False
++
++
++def _internal_url(key: str) -> str:
++    return get_s3_client().generate_presigned_url(
++        "get_object", Params={"Bucket": settings.s3_bucket, "Key": key}, ExpiresIn=900)
++
++
++@router.post("/assets/{asset_id}/poster")
++def set_poster(asset_id: uuid.UUID, body: PosterRequest, db: Session = Depends(get_db),
++               current_user: User = Depends(get_current_user)):
++    from packages.transcoder.osc_poster import pick_poster_time, extract_poster
++
++    asset = db.query(Asset).filter(Asset.id == asset_id, Asset.deleted_at.is_(None)).first()
++    if not asset:
++        raise HTTPException(404, "Asset not found")
++    if not is_staff(db, asset.project_id, current_user):
++        raise HTTPException(403, "Only OSC staff can change a thumbnail")
++    if asset.asset_type != AssetType.video:
++        raise HTTPException(422, "Posters are for video assets")
++    if body.time is None and not body.random:
++        raise HTTPException(422, "Give a time (seconds) or random: true")
++
++    q = db.query(AssetVersion).filter(AssetVersion.asset_id == asset_id, AssetVersion.deleted_at.is_(None),
++                                      AssetVersion.processing_status == ProcessingStatus.ready)
++    version = q.filter(AssetVersion.id == body.version_id).first() if body.version_id else \
++        q.order_by(AssetVersion.version_number.desc()).first()
++    if not version:
++        raise HTTPException(404, "No ready version")
++    mf = db.query(MediaFile).filter(MediaFile.version_id == version.id).first()
++    if not mf or not mf.s3_key_raw:
++        raise HTTPException(404, "Media file not found")
++
++    src = _internal_url(mf.s3_key_raw)
++    if body.random:
++        t = pick_poster_time(src, mf.duration_seconds)
++        if t is None:
++            raise HTTPException(422, "Duration unknown; pick a frame with T instead")
++    else:
++        t = max(0.0, float(body.time))
++        if mf.duration_seconds and t > mf.duration_seconds:
++            raise HTTPException(422, "Time is past the end of the video")
++
++    with tempfile.TemporaryDirectory() as d:
++        out = os.path.join(d, "poster.jpg")
++        if not extract_poster(src, t, out) or not os.path.exists(out):
++            raise HTTPException(502, "Could not grab that frame")
++        data = open(out, "rb").read()
++
++    prefix = os.path.dirname(mf.s3_key_thumbnail or "") or os.path.dirname(mf.s3_key_raw)
++    key = f"{prefix}/osc_poster_{int(_time.time() * 1000)}.jpg"
++    put_object(key, data, content_type="image/jpeg", cache_control="max-age=31536000, immutable")
++    old = mf.s3_key_thumbnail
++    mf.s3_key_thumbnail = key
++    db.commit()
++    if old and "/osc_poster_" in old:
++        try:
++            delete_object(old)
++        except Exception:
++            pass
++    return {"version_id": str(version.id), "time": round(t, 3), "thumbnail_url": generate_presigned_get_url(key)}
+diff --git a/apps/api/tests/test_osc_poster.py b/apps/api/tests/test_osc_poster.py
+new file mode 100644
+index 0000000..19e7f21
+--- /dev/null
++++ b/apps/api/tests/test_osc_poster.py
+@@ -0,0 +1,40 @@
++"""OSC posters: the default thumbnail is a random GOOD frame after the slate, never the slate."""
++import random
++
++from packages.transcoder import osc_poster as op
++
++N = op.W * op.H
++
++
++def frame(fn):
++    return bytes(max(0, min(255, int(fn(i % op.W, i // op.W)))) for i in range(N))
++
++
++def test_window_skips_slate_and_head_tail():
++    lo, hi = op.window(58.7)            # an OSC :53 spot + 5 s slate
++    assert lo >= op.SLATE_SECONDS and abs(lo - 0.15 * 58.7) < 1e-6
++    assert abs(hi - 0.85 * 58.7) < 1e-6
++    assert op.window(None) is None and op.window(0.5) is None
++    lo, hi = op.window(6.0)             # too short for a slate: plain 15–85%
++    assert 0 < lo < hi < 6.0
++
++
++def test_black_white_flat_and_soft_frames_are_rejected():
++    assert not op.score_frame(frame(lambda x, y: 4))[0]            # near-black
++    assert not op.score_frame(frame(lambda x, y: 250))[0]          # near-white
++    assert not op.score_frame(frame(lambda x, y: 120 + x * 0.3))[0]  # flat / fade, low contrast
++    assert not op.score_frame(frame(lambda x, y: 60 + x * 2))[0]   # smooth ramp: contrast, no detail
++
++
++def test_a_detailed_mid_exposure_frame_is_accepted():
++    rng = random.Random(7)
++    ok, score, m = op.score_frame(frame(lambda x, y: 120 + rng.randint(-70, 70)))
++    assert ok, m
++
++
++def test_pick_rerolls_past_bad_frames(monkeypatch):
++    seq = iter([frame(lambda x, y: 3), frame(lambda x, y: 252),
++                frame(lambda x, y: 120 + ((x * 7 + y * 13) % 90) - 45)])
++    monkeypatch.setattr(op, "_grab_gray", lambda url, t: next(seq))
++    t = op.pick_poster_time("u", 60.0, rng=random.Random(1))
++    assert op.SLATE_SECONDS <= t <= 51.0
+diff --git a/apps/web/app/(dashboard)/projects/[id]/assets/[assetId]/page.tsx b/apps/web/app/(dashboard)/projects/[id]/assets/[assetId]/page.tsx
+index 1b12886..ecfc5ad 100644
+--- a/apps/web/app/(dashboard)/projects/[id]/assets/[assetId]/page.tsx
++++ b/apps/web/app/(dashboard)/projects/[id]/assets/[assetId]/page.tsx
+@@ -17,6 +17,7 @@ import { CommentInput } from '@/components/review/comment-input'
+ // ApprovalBar removed for now
+ import { VersionSwitcher } from '@/components/review/version-switcher'
+ import { StatusPill } from '@/components/osc/status'
++import { PosterMenu } from '@/components/osc/poster'
+ import { ShareDialog } from '@/components/review/share-dialog'
+ import { CompareOverlay } from '@/components/review/compare/compare-overlay'
+ import { useReviewStore } from '@/stores/review-store'
+@@ -604,6 +605,7 @@ function ReviewScreenInner({ projectId }: { projectId: string }) {
+             }}
+           />
+           {asset && <StatusPill asset={asset} />}
++          {asset && asset.asset_type === 'video' && <PosterMenu assetId={asset.id} versionId={currentVersion?.id} />}
+           <VersionSwitcher versions={versions} />
+           {asset && canCompare(asset.asset_type, versions) && (
+             <button
+diff --git a/apps/web/components/osc/poster.tsx b/apps/web/components/osc/poster.tsx
+new file mode 100644
+index 0000000..e267fb1
+--- /dev/null
++++ b/apps/web/components/osc/poster.tsx
+@@ -0,0 +1,82 @@
++'use client'
++
++/**
++ * OSC: choose the grid thumbnail from the player (Sam 10/2 23:57: "scrub to an image and hit a
++ * hotkey to change the thumbnail"). Hotkey T = use the frame under the playhead; the menu has the
++ * same action for touch, plus Shuffle (a fresh random good frame). Staff only (the API refuses
++ * everyone else). Each version keeps its own poster.
++ */
++import * as React from 'react'
++import * as DropdownMenu from '@radix-ui/react-dropdown-menu'
++import { ImageIcon, Shuffle, Loader2 } from 'lucide-react'
++import { api } from '@/lib/api'
++import { useReviewStore } from '@/stores/review-store'
++import { useToast } from '@/components/shared/toast'
++
++function isTyping(el: Element | null): boolean {
++  if (!el) return false
++  const tag = el.tagName
++  return tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' || (el as HTMLElement).isContentEditable
++}
++
++export function PosterMenu({ assetId, versionId }: { assetId: string; versionId?: string }) {
++  const { toast } = useToast()
++  const [busy, setBusy] = React.useState(false)
++  const busyRef = React.useRef(false)
++
++  const run = React.useCallback(async (random: boolean) => {
++    if (busyRef.current) return
++    busyRef.current = true; setBusy(true)
++    try {
++      const time = useReviewStore.getState().playheadTime
++      const r = await api.post<{ time: number }>(`/assets/${assetId}/poster`,
++        random ? { random: true, version_id: versionId } : { time, version_id: versionId })
++      const s = r.time
++      const tc = `${Math.floor(s / 60)}:${String(Math.floor(s % 60)).padStart(2, '0')}`
++      toast(random ? `Thumbnail shuffled (${tc})` : `Thumbnail updated (${tc})`, 'success', 2500)
++    } catch (e) {
++      toast(e instanceof Error ? e.message : 'Could not set the thumbnail', 'error')
++    } finally {
++      busyRef.current = false; setBusy(false)
++    }
++  }, [assetId, versionId, toast])
++
++  React.useEffect(() => {
++    const onKey = (e: KeyboardEvent) => {
++      if (e.key !== 't' && e.key !== 'T') return
++      if (e.metaKey || e.ctrlKey || e.altKey || isTyping(document.activeElement)) return
++      e.preventDefault()
++      run(false)
++    }
++    window.addEventListener('keydown', onKey)
++    return () => window.removeEventListener('keydown', onKey)
++  }, [run])
++
++  return (
++    <DropdownMenu.Root>
++      <DropdownMenu.Trigger asChild>
++        <button type="button" title="Thumbnail (T = use this frame)" aria-label="Thumbnail options"
++          className="inline-flex items-center gap-1.5 rounded-md px-2.5 h-8 text-xs font-medium border border-border text-text-secondary hover:text-text-primary hover:bg-bg-hover transition-colors outline-none focus-visible:[box-shadow:0_0_0_2px_var(--bg-primary),0_0_0_4px_var(--accent)]">
++          {busy ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <ImageIcon className="h-3.5 w-3.5" />}
++          Thumbnail
++        </button>
++      </DropdownMenu.Trigger>
++      <DropdownMenu.Portal>
++        <DropdownMenu.Content align="end" sideOffset={6}
++          className="z-[100] min-w-[220px] rounded-xl border border-border bg-bg-elevated shadow-2xl py-1.5">
++          <DropdownMenu.Item onSelect={() => run(false)}
++            className="flex items-center gap-2.5 mx-1 px-2.5 py-2 rounded-lg text-sm text-text-secondary hover:bg-bg-hover hover:text-text-primary cursor-pointer outline-none">
++            <ImageIcon className="h-3.5 w-3.5 text-text-tertiary" />
++            <span className="flex-1">Use this frame</span>
++            <kbd className="text-[10px] text-text-tertiary border border-border rounded px-1">T</kbd>
++          </DropdownMenu.Item>
++          <DropdownMenu.Item onSelect={() => run(true)}
++            className="flex items-center gap-2.5 mx-1 px-2.5 py-2 rounded-lg text-sm text-text-secondary hover:bg-bg-hover hover:text-text-primary cursor-pointer outline-none">
++            <Shuffle className="h-3.5 w-3.5 text-text-tertiary" />
++            <span className="flex-1">Shuffle (random frame)</span>
++          </DropdownMenu.Item>
++        </DropdownMenu.Content>
++      </DropdownMenu.Portal>
++    </DropdownMenu.Root>
++  )
++}
+diff --git a/apps/web/components/osc/status.tsx b/apps/web/components/osc/status.tsx
+index b00d30b..ee467bb 100644
+--- a/apps/web/components/osc/status.tsx
++++ b/apps/web/components/osc/status.tsx
+@@ -100,28 +100,38 @@ export function StatusPill({
+ }: { asset: Pick<Asset, 'id' | 'status'>; editable?: boolean; size?: 'xs' | 'sm'; className?: string }) {
+   const current = useEffectiveStatus(asset)
+   const meta = statusMeta(current)
+-  const pill = (
+-    <span
+-      data-osc-status={current}
+-      className={cn(
+-        'inline-flex items-center gap-1 rounded-full font-semibold leading-none whitespace-nowrap select-none',
+-        size === 'xs' ? 'px-2 py-[3px] text-[10px]' : 'px-2.5 py-1 text-xs',
+-        editable && 'cursor-pointer',
+-        className,
+-      )}
+-      style={{ background: meta.bg, color: meta.fg }}
+-    >
++  // ONE element is the pill: the ring must hug it (Sam 10/2 23:55 "the orange outline doesn't
++  // align"). Before, a wrapper <button> carried the ring around an inner <span>, so the ring had the
++  // button's box (plus inline baseline space), not the pill's. Now the button IS the pill, the ring
++  // is a box-shadow on that same rounded element (gap in the page colour, then the accent), and it
++  // shows on keyboard focus only (:focus-visible), never as a leftover after a click.
++  const pillClass = cn(
++    'inline-flex items-center gap-1 rounded-full font-semibold leading-none whitespace-nowrap select-none align-middle',
++    size === 'xs' ? 'px-2 py-[3px] text-[10px]' : 'px-2.5 py-1 text-xs',
++    className,
++  )
++  const inner = (
++    <>
+       {meta.label}
+       {editable && <ChevronDown className={size === 'xs' ? 'h-2.5 w-2.5' : 'h-3 w-3'} style={{ color: meta.fg }} />}
+-    </span>
++    </>
+   )
+-  if (!editable) return pill
++  if (!editable) {
++    return (
++      <span data-osc-status={current} className={pillClass} style={{ background: meta.bg, color: meta.fg }}>
++        {inner}
++      </span>
++    )
++  }
+   return (
+     <DropdownMenu.Root>
+       <DropdownMenu.Trigger asChild>
+-        <button type="button" aria-label={`Status: ${meta.label}. Change status`}
+-          onClick={(e) => e.stopPropagation()} className="outline-none rounded-full focus-visible:ring-2 focus-visible:ring-accent">
+-          {pill}
++        <button type="button" data-osc-status={current} aria-label={`Status: ${meta.label}. Change status`}
++          onClick={(e) => e.stopPropagation()}
++          className={cn(pillClass, 'cursor-pointer border-0 outline-none focus:outline-none',
++            'focus-visible:[box-shadow:0_0_0_2px_var(--bg-primary),0_0_0_4px_var(--accent)]')}
++          style={{ background: meta.bg, color: meta.fg }}>
++          {inner}
+         </button>
+       </DropdownMenu.Trigger>
+       <DropdownMenu.Portal>
+@@ -157,7 +167,7 @@ export function StatusFilterBar({ assets }: { assets: Pick<Asset, 'id' | 'status
+         const n = counts.get(s.value) ?? 0
+         return (
+           <button key={s.value} type="button" onClick={() => toggle(s.value)} aria-pressed={on}
+-            className={cn('inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-xs transition-colors',
++            className={cn('inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-xs transition-colors outline-none focus-visible:[box-shadow:0_0_0_2px_var(--bg-primary),0_0_0_4px_var(--accent)]',
+               on ? 'border-transparent' : 'border-border text-text-secondary hover:text-text-primary hover:bg-bg-hover',
+               n === 0 && !on && 'opacity-50')}
+             style={on ? { background: s.bg, color: s.fg } : undefined}>
+diff --git a/packages/transcoder/ffmpeg_transcoder.py b/packages/transcoder/ffmpeg_transcoder.py
+index b67c2a5..0be1faf 100644
+--- a/packages/transcoder/ffmpeg_transcoder.py
++++ b/packages/transcoder/ffmpeg_transcoder.py
+@@ -1656,11 +1656,27 @@ class FFmpegTranscoder(BaseTranscoder):
+                     "zscale=t=bt709:m=bt709:r=tv"
+                 )
+             thumb_vf += ",format=yuvj420p"
+-            thumb_cmd = [
+-                "ffmpeg", "-y", "-i", input_url,
+-                "-vf", thumb_vf, "-q:v", "2", "-frames:v", "1",
+-                str(work_dir / "thumb_%04d.jpg"),
+-            ]
++            # OSC: a random GOOD frame after the 5 s slate (15%-85% of the program, re-rolled if
++            # black/white/flat/soft) instead of ffmpeg's `thumbnail` pick from the first ~100
++            # frames, which is always the slate on an OSC render. Falls back to upstream's way.
++            poster_t = None
++            try:
++                from .osc_poster import pick_poster_time
++                poster_t = pick_poster_time(input_url, (meta.duration_seconds or None) if meta else None)
++            except Exception:
++                poster_t = None
++            if poster_t is not None:
++                thumb_cmd = [
++                    "ffmpeg", "-y", "-ss", f"{poster_t:.3f}", "-i", input_url,
++                    "-vf", thumb_vf.replace("thumbnail,", "", 1), "-q:v", "2", "-frames:v", "1",
++                    str(work_dir / "thumb_%04d.jpg"),
++                ]
++            else:
++                thumb_cmd = [
++                    "ffmpeg", "-y", "-i", input_url,
++                    "-vf", thumb_vf, "-q:v", "2", "-frames:v", "1",
++                    str(work_dir / "thumb_%04d.jpg"),
++                ]
+             self._run(thumb_cmd, label="ffmpeg")
+             thumbnail_key = f"{job.output_s3_prefix}/thumbnail.jpg"
+             uploaded_thumb = False
+diff --git a/packages/transcoder/osc_poster.py b/packages/transcoder/osc_poster.py
+new file mode 100644
+index 0000000..07755dd
+--- /dev/null
++++ b/packages/transcoder/osc_poster.py
+@@ -0,0 +1,92 @@
++"""OSC posters (Sam 10/2/26 23:55–23:58): the grid thumbnail is a RANDOM good frame from the
++program, never the 5-second slate every OSC render opens with.
++
++  * window: after the slate (first 5 s skipped) and away from head/tail: 15%–85% of the duration
++  * a pick is rejected and re-rolled (up to 5 tries) if it is near-black, near-white, a flat/fading
++    frame (low contrast), or soft (low edge energy). If every try fails the best-scoring one wins.
++  * checks run on a tiny 64x36 grayscale grab (no numpy, no full decode) — milliseconds each.
++
++Used by the transcoder (default poster for every new version) and by the API's "set poster"
++endpoint (hotkey T = a chosen time; Shuffle = a fresh random pick).
++"""
++from __future__ import annotations
++
++import random
++import subprocess
++from typing import Optional
++
++SLATE_SECONDS = 5.0
++W, H = 64, 36
++
++
++def _grab_gray(input_url: str, t: float) -> Optional[bytes]:
++    cmd = ["ffmpeg", "-v", "error", "-ss", f"{t:.3f}", "-i", input_url, "-frames:v", "1",
++           "-vf", f"scale={W}:{H},format=gray", "-f", "rawvideo", "-"]
++    try:
++        out = subprocess.run(cmd, capture_output=True, timeout=60).stdout
++    except Exception:
++        return None
++    return out if len(out) >= W * H else None
++
++
++def score_frame(buf: bytes) -> tuple[bool, float, dict]:
++    """(acceptable, score, metrics) for a W*H 8-bit grayscale frame."""
++    px = buf[: W * H]
++    n = len(px)
++    mean = sum(px) / n
++    var = sum((p - mean) ** 2 for p in px) / n
++    std = var ** 0.5
++    edge = 0
++    for y in range(H):
++        row = y * W
++        for x in range(W - 1):
++            edge += abs(px[row + x + 1] - px[row + x])
++    for y in range(H - 1):
++        row, nxt = y * W, (y + 1) * W
++        for x in range(W):
++            edge += abs(px[nxt + x] - px[row + x])
++    edge /= (W - 1) * H + W * (H - 1)
++    m = {"mean": round(mean, 1), "std": round(std, 1), "edge": round(edge, 2)}
++    ok = 24 <= mean <= 232 and std >= 18 and edge >= 4.0
++    # prefer mid exposure, contrast and detail
++    s = std + 4 * edge - abs(mean - 120) * 0.3
++    return ok, s, m
++
++
++def window(duration: Optional[float]) -> Optional[tuple[float, float]]:
++    if not duration or duration <= 1:
++        return None
++    lo = max(SLATE_SECONDS, 0.15 * duration) if duration > SLATE_SECONDS + 2 else 0.15 * duration
++    hi = 0.85 * duration
++    if hi <= lo:
++        lo, hi = 0.15 * duration, 0.85 * duration
++    return lo, hi
++
++
++def pick_poster_time(input_url: str, duration: Optional[float], tries: int = 5,
++                     rng: Optional[random.Random] = None) -> Optional[float]:
++    w = window(duration)
++    if not w:
++        return None
++    rng = rng or random.Random()
++    best_t, best_s = None, float("-inf")
++    for _ in range(tries):
++        t = rng.uniform(*w)
++        buf = _grab_gray(input_url, t)
++        if buf is None:
++            continue
++        ok, s, _m = score_frame(buf)
++        if ok:
++            return t
++        if s > best_s:
++            best_t, best_s = t, s
++    return best_t if best_t is not None else rng.uniform(*w)
++
++
++def extract_poster(input_url: str, t: float, out_path: str, vf: str = "format=yuvj420p") -> bool:
++    cmd = ["ffmpeg", "-y", "-v", "error", "-ss", f"{max(0.0, t):.3f}", "-i", input_url,
++           "-frames:v", "1", "-vf", vf, "-q:v", "2", out_path]
++    try:
++        return subprocess.run(cmd, capture_output=True, timeout=120).returncode == 0
++    except Exception:
++        return False

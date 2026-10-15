@@ -1,0 +1,17 @@
+OSC 0016: superadmin merge: many items -> ONE item with the versions stacked
+
+Sam 10/8: every deliverable must be one item with its versions stacked, not
+separate files. FreeFrame can't move a version between assets and a
+re-upload loses comments, so POST /osc/admin/merge moves the rows: source
+versions (media files ride along by version_id), their comments, guest
+decisions, notifications and activity rows go to the target; the stack is
+renumbered oldest upload first (two-step, for the unique constraint).
+Nothing is deleted: emptied sources move to `_archive`, renamed "(merged
+into ...)", never soft-deleted (so retention GC can't reach moved files;
+S3 keys are unchanged). Guards: superadmin; same project; 409 if an enabled
+share link serves a source, or would see a different top version on the
+target (override_links names links checked by hand); dry_run (default)
+returns the plan only. Optional per-source label (osc_version_labels)
+overrides the file-name label, e.g. "v8 · ALT B Homeward".
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>

@@ -1,0 +1,437 @@
+diff --git a/apps/api/main.py b/apps/api/main.py
+index 7b9f17b..e7ac1d8 100644
+--- a/apps/api/main.py
++++ b/apps/api/main.py
+@@ -104,6 +104,8 @@ from .routers import osc_poster  # OSC: set/shuffle a version's poster (grid thu
+ app.include_router(osc_poster.router)
+ from .routers import osc_storyboard  # OSC: hover-scrub storyboards
+ app.include_router(osc_storyboard.router)
++from .routers import osc_share_decision  # OSC: client approve / request changes from a share link
++app.include_router(osc_share_decision.router)
+ 
+ @app.get("/health")
+ def health():
+diff --git a/apps/api/osc_status_ddl.py b/apps/api/osc_status_ddl.py
+index 350a411..a0c5673 100644
+--- a/apps/api/osc_status_ddl.py
++++ b/apps/api/osc_status_ddl.py
+@@ -14,7 +14,22 @@ def main() -> None:
+     engine = create_engine(settings.database_url, isolation_level="AUTOCOMMIT")
+     with engine.connect() as conn:
+         conn.execute(text("ALTER TYPE assetstatus ADD VALUE IF NOT EXISTS 'client_review'"))
+-    print("osc_status_ddl: assetstatus has client_review")
++        # OSC 0010: a client's decision from a share link (guests aren't users, so upstream's
++        # approvals table, which needs user_id, can't hold it). One decision per person per version.
++        conn.execute(text("""
++            CREATE TABLE IF NOT EXISTS osc_guest_approvals (
++                id uuid PRIMARY KEY,
++                share_link_id uuid NOT NULL REFERENCES share_links(id),
++                asset_id uuid NOT NULL REFERENCES assets(id),
++                version_id uuid NOT NULL REFERENCES asset_versions(id),
++                email varchar(255) NOT NULL,
++                name varchar(255) NOT NULL,
++                status varchar(16) NOT NULL CHECK (status IN ('approved', 'rejected')),
++                note text,
++                created_at timestamptz NOT NULL DEFAULT now(),
++                UNIQUE (version_id, email)
++            )"""))
++    print("osc_status_ddl: assetstatus has client_review; osc_guest_approvals ready")
+ 
+ 
+ if __name__ == "__main__":
+diff --git a/apps/api/routers/approvals.py b/apps/api/routers/approvals.py
+index 4407965..22de263 100644
+--- a/apps/api/routers/approvals.py
++++ b/apps/api/routers/approvals.py
+@@ -69,30 +69,10 @@ def _osc_sync_status(db: Session, asset: Asset, version_id: uuid.UUID) -> None:
+     """OSC status labels auto-rule: reviewer decisions on the LATEST version drive the label.
+     Any "changes requested" (rejection) on it -> Changes requested; otherwise any approval -> Approved.
+     Decisions on an older version never move the label (a new version already reset it to
+-    Needs review). FreeFrame has no "required reviewers", so one approval is enough today."""
+-    from ..models.asset import AssetStatus, AssetVersion
+-
+-    latest = (
+-        db.query(AssetVersion)
+-        .filter(AssetVersion.asset_id == asset.id, AssetVersion.deleted_at.is_(None))
+-        .order_by(AssetVersion.version_number.desc())
+-        .first()
+-    )
+-    if not latest or latest.id != version_id:
+-        return
+-    decisions = {
+-        a.status
+-        for a in db.query(Approval).filter(
+-            Approval.version_id == version_id, Approval.deleted_at.is_(None)
+-        )
+-    }
+-    if ApprovalStatus.rejected in decisions:
+-        asset.status = AssetStatus.rejected
+-    elif ApprovalStatus.approved in decisions:
+-        asset.status = AssetStatus.approved
+-    else:
+-        return
+-    db.commit()
++    Needs review). FreeFrame has no "required reviewers", so one approval is enough today.
++    (0010: the rule lives in services/osc_status_rules.py and also counts client share-link decisions.)"""
++    from ..services.osc_status_rules import sync_status
++    sync_status(db, asset, version_id)
+ 
+ 
+ @router.post("/assets/{asset_id}/approve", response_model=ApprovalResponse)
+diff --git a/apps/api/routers/osc_share_decision.py b/apps/api/routers/osc_share_decision.py
+new file mode 100644
+index 0000000..fad89fe
+--- /dev/null
++++ b/apps/api/routers/osc_share_decision.py
+@@ -0,0 +1,119 @@
++"""OSC 0010: a client approves (or requests changes) straight from a share link.
++
++Upstream FreeFrame has an "approve" link permission, but the only approve route needs a signed-in
++project member, and the share page has no approval UI at all. So a client holding just the link
++Sam sent could comment but never say "approved". This adds:
++
++  POST /share/{token}/decision  {decision: "approved"|"rejected", note?, asset_id?, version_id?,
++                                 guest_name?, guest_email?}
++    - only on a link whose permission is "approve" (403 otherwise)
++    - identity: the signed-in user, else guest name + email (like a guest comment)
++    - one decision per person per version (re-deciding replaces it)
++    - visible to staff three ways: a public comment in the thread ("✅ Approved — Name" /
++      "🔁 Changes requested — Name: note"), the link's activity log (approved/rejected), and the
++      status pill (latest version: changes requested -> red, else approved -> green)
++  GET  /share/{token}/decisions?asset_id=&version_id=  -> [{name, decision, at}] for that version
++"""
++import uuid
++from datetime import datetime, timezone
++from typing import Optional
++
++from fastapi import APIRouter, Depends, HTTPException, Query
++from pydantic import BaseModel
++from sqlalchemy import text
++from sqlalchemy.orm import Session
++
++from ..database import get_db
++from ..middleware.auth import get_optional_user
++from ..models.asset import Asset, AssetVersion, ProcessingStatus
++from ..models.comment import Comment
++from ..models.share import ShareActivityAction, ShareLinkActivity, SharePermission
++from ..models.user import GuestUser, User
++from ..services import event_service
++from ..services.osc_status_rules import sync_status
++from ..services.permissions import validate_asset_in_share, validate_share_link_with_session
++
++router = APIRouter(tags=["osc_share_decision"])
++
++
++class DecisionIn(BaseModel):
++    decision: str
++    note: Optional[str] = None
++    asset_id: Optional[uuid.UUID] = None
++    version_id: Optional[uuid.UUID] = None
++    guest_name: Optional[str] = None
++    guest_email: Optional[str] = None
++
++
++def _resolve(db: Session, link, asset_id, version_id):
++    target = link.asset_id or asset_id
++    if not target:
++        raise HTTPException(400, "asset_id is required for folder/project shares")
++    asset = db.query(Asset).filter(Asset.id == target, Asset.deleted_at.is_(None)).first()
++    if not asset:
++        raise HTTPException(404, "Asset not found")
++    validate_asset_in_share(db, link, asset)
++    q = db.query(AssetVersion).filter(AssetVersion.asset_id == asset.id, AssetVersion.deleted_at.is_(None),
++                                      AssetVersion.processing_status == ProcessingStatus.ready)
++    version = q.filter(AssetVersion.id == version_id).first() if version_id else \
++        q.order_by(AssetVersion.version_number.desc()).first()
++    if not version:
++        raise HTTPException(400, "No ready version for this asset")
++    return asset, version
++
++
++@router.post("/share/{token}/decision", status_code=201)
++def share_decision(token: str, body: DecisionIn, share_session: Optional[str] = Query(None),
++                   db: Session = Depends(get_db), current_user: Optional[User] = Depends(get_optional_user)):
++    link = validate_share_link_with_session(db, token, share_session=share_session, current_user=current_user)
++    if link.permission != SharePermission.approve:
++        raise HTTPException(403, "This link doesn't allow approvals")
++    decision = (body.decision or "").strip().lower()
++    if decision not in ("approved", "rejected"):
++        raise HTTPException(400, "decision must be 'approved' or 'rejected'")
++    asset, version = _resolve(db, link, body.asset_id, body.version_id)
++
++    if current_user:
++        email, name, author_id, guest_id = current_user.email.lower(), current_user.name, current_user.id, None
++    else:
++        if not body.guest_email or not body.guest_name:
++            raise HTTPException(400, "guest_name and guest_email are required")
++        email, name = body.guest_email.strip().lower(), body.guest_name.strip()
++        guest = db.query(GuestUser).filter(GuestUser.email == email).first()
++        if not guest:
++            guest = GuestUser(email=email, name=name)
++            db.add(guest); db.flush()
++        author_id, guest_id = None, guest.id
++
++    db.execute(text("""
++        INSERT INTO osc_guest_approvals (id, share_link_id, asset_id, version_id, email, name, status, note)
++        VALUES (:id, :l, :a, :v, :e, :n, :s, :note)
++        ON CONFLICT (version_id, email) DO UPDATE
++          SET status = EXCLUDED.status, note = EXCLUDED.note, name = EXCLUDED.name, created_at = now()"""),
++        {"id": str(uuid.uuid4()), "l": str(link.id), "a": str(asset.id), "v": str(version.id),
++         "e": email, "n": name, "s": decision, "note": (body.note or "").strip() or None})
++
++    label = "✅ Approved" if decision == "approved" else "🔁 Changes requested"
++    note = (body.note or "").strip()
++    db.add(Comment(asset_id=asset.id, version_id=version.id, author_id=author_id, guest_author_id=guest_id,
++                   body=f"{label}: {note}" if note else label, visibility="public"))
++    db.add(ShareLinkActivity(share_link_id=link.id,
++                             action=ShareActivityAction.approved if decision == "approved" else ShareActivityAction.rejected,
++                             actor_email=email, actor_name=name, asset_id=asset.id, asset_name=asset.name))
++    db.commit()
++    sync_status(db, asset, version.id)
++    event_service.publish_sync(asset.project_id, "approval_updated",
++                               {"asset_id": str(asset.id), "status": decision, "via": "share_link"})
++    return {"decision": decision, "version_id": str(version.id), "asset_status": asset.status.value
++            if hasattr(asset.status, "value") else str(asset.status)}
++
++
++@router.get("/share/{token}/decisions")
++def share_decisions(token: str, asset_id: Optional[uuid.UUID] = None, version_id: Optional[uuid.UUID] = None,
++                    share_session: Optional[str] = Query(None), db: Session = Depends(get_db),
++                    current_user: Optional[User] = Depends(get_optional_user)):
++    link = validate_share_link_with_session(db, token, share_session=share_session, current_user=current_user)
++    asset, version = _resolve(db, link, asset_id, version_id)
++    rows = db.execute(text("SELECT name, status, created_at FROM osc_guest_approvals WHERE version_id = :v "
++                           "ORDER BY created_at"), {"v": str(version.id)}).fetchall()
++    return [{"name": r[0], "decision": r[1], "at": r[2].isoformat() if r[2] else None} for r in rows]
+diff --git a/apps/api/services/osc_status_rules.py b/apps/api/services/osc_status_rules.py
+new file mode 100644
+index 0000000..d12a552
+--- /dev/null
++++ b/apps/api/services/osc_status_rules.py
+@@ -0,0 +1,44 @@
++"""OSC status labels: the auto-rule, shared by staff approvals and client (share-link) decisions.
++
++Decisions on the asset's LATEST version drive the label: any "changes requested" -> rejected
++(Changes requested, red); otherwise any approval -> approved (Approved, green). Decisions on an older
++version never move it (a new version already reset it to Needs review)."""
++import uuid
++
++from sqlalchemy import text
++from sqlalchemy.orm import Session
++
++from ..models.approval import Approval, ApprovalStatus
++from ..models.asset import Asset, AssetStatus, AssetVersion
++
++
++def latest_version_id(db: Session, asset_id) -> "uuid.UUID | None":
++    v = (db.query(AssetVersion)
++         .filter(AssetVersion.asset_id == asset_id, AssetVersion.deleted_at.is_(None))
++         .order_by(AssetVersion.version_number.desc()).first())
++    return v.id if v else None
++
++
++def guest_decisions(db: Session, version_id) -> set:
++    try:
++        rows = db.execute(text("SELECT status FROM osc_guest_approvals WHERE version_id = :v"),
++                          {"v": str(version_id)}).fetchall()
++    except Exception:  # table not created yet (DDL runs at API start)
++        db.rollback()
++        return set()
++    return {r[0] for r in rows}
++
++
++def sync_status(db: Session, asset: Asset, version_id) -> None:
++    if latest_version_id(db, asset.id) != version_id:
++        return
++    staff = {a.status for a in db.query(Approval).filter(Approval.version_id == version_id,
++                                                         Approval.deleted_at.is_(None))}
++    guests = guest_decisions(db, version_id)
++    if ApprovalStatus.rejected in staff or "rejected" in guests:
++        asset.status = AssetStatus.rejected
++    elif ApprovalStatus.approved in staff or "approved" in guests:
++        asset.status = AssetStatus.approved
++    else:
++        return
++    db.commit()
+diff --git a/apps/api/tests/test_osc_share_decision.py b/apps/api/tests/test_osc_share_decision.py
+new file mode 100644
+index 0000000..eb79232
+--- /dev/null
++++ b/apps/api/tests/test_osc_share_decision.py
+@@ -0,0 +1,34 @@
++"""OSC 0010: client approval from a share link: the guard rails (the happy path is checked live)."""
++import uuid
++from types import SimpleNamespace
++from unittest.mock import patch
++
++from apps.api.models.share import SharePermission
++
++M = "apps.api.routers.osc_share_decision"
++
++
++def _link(perm):
++    return SimpleNamespace(id=uuid.uuid4(), asset_id=uuid.uuid4(), permission=perm)
++
++
++def test_a_comment_only_link_cannot_approve(client):
++    with patch(f"{M}.validate_share_link_with_session", return_value=_link(SharePermission.comment)):
++        r = client.post("/share/tok/decision", json={"decision": "approved", "guest_name": "A", "guest_email": "a@x.com"})
++    assert r.status_code == 403
++
++
++def test_unknown_decision_is_refused(client):
++    with patch(f"{M}.validate_share_link_with_session", return_value=_link(SharePermission.approve)):
++        r = client.post("/share/tok/decision", json={"decision": "maybe", "guest_name": "A", "guest_email": "a@x.com"})
++    assert r.status_code == 400
++
++
++def test_a_guest_must_say_who_they_are(client, mock_db):
++    asset = SimpleNamespace(id=uuid.uuid4(), name="Spot", deleted_at=None, project_id=uuid.uuid4())
++    version = SimpleNamespace(id=uuid.uuid4())
++    mock_db.first.side_effect = [asset, version]
++    with patch(f"{M}.validate_share_link_with_session", return_value=_link(SharePermission.approve)), \
++         patch(f"{M}.validate_asset_in_share"):
++        r = client.post("/share/tok/decision", json={"decision": "approved"})
++    assert r.status_code == 400 and "guest_name" in r.text
+diff --git a/apps/web/components/osc/share-decision.tsx b/apps/web/components/osc/share-decision.tsx
+new file mode 100644
+index 0000000..0fe346d
+--- /dev/null
++++ b/apps/web/components/osc/share-decision.tsx
+@@ -0,0 +1,114 @@
++'use client'
++
++/**
++ * OSC 0010: client approval from a share link. Rendered only when the link's permission is
++ * "approve". Approve (green) / Request changes (with a note). Uses the signed-in session or the
++ * guest identity the share page already keeps (ff_guest_identity); asks for name + email once if
++ * neither exists. Shows who has decided on this version so far.
++ */
++import * as React from 'react'
++import { Check, RotateCcw, Loader2 } from 'lucide-react'
++
++const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'
++type Decision = { name: string; decision: 'approved' | 'rejected'; at: string | null }
++
++function guestIdentity(): { name: string; email: string } | null {
++  try { const s = localStorage.getItem('ff_guest_identity'); return s ? JSON.parse(s) : null } catch { return null }
++}
++
++export function ShareDecision({ token, shareSession, assetId, versionId, permission }: {
++  token: string; shareSession?: string | null; assetId: string; versionId?: string; permission: string
++}) {
++  const [decisions, setDecisions] = React.useState<Decision[]>([])
++  const [mode, setMode] = React.useState<null | 'approved' | 'rejected'>(null)
++  const [note, setNote] = React.useState('')
++  const [name, setName] = React.useState('')
++  const [email, setEmail] = React.useState('')
++  const [busy, setBusy] = React.useState(false)
++  const [msg, setMsg] = React.useState<string | null>(null)
++  const qs = `asset_id=${assetId}${versionId ? `&version_id=${versionId}` : ''}${shareSession ? `&share_session=${shareSession}` : ''}`
++
++  const load = React.useCallback(async () => {
++    try {
++      const r = await fetch(`${API_URL}/share/${token}/decisions?${qs}`)
++      if (r.ok) setDecisions(await r.json())
++    } catch {}
++  }, [token, qs])
++  React.useEffect(() => { if (permission === 'approve') load() }, [permission, load])
++  if (permission !== 'approve') return null
++
++  const signedIn = typeof window !== 'undefined' && !!localStorage.getItem('ff_access_token')
++  const known = signedIn || !!guestIdentity()
++
++  async function send(decision: 'approved' | 'rejected') {
++    setBusy(true); setMsg(null)
++    try {
++      const headers: Record<string, string> = { 'Content-Type': 'application/json' }
++      const t = localStorage.getItem('ff_access_token')
++      if (t) headers.Authorization = `Bearer ${t}`
++      let gi = guestIdentity()
++      if (!t && !gi && name.trim() && email.trim()) {
++        gi = { name: name.trim(), email: email.trim() }
++        localStorage.setItem('ff_guest_identity', JSON.stringify(gi))
++      }
++      const body = { decision, note: note.trim() || undefined, asset_id: assetId, version_id: versionId,
++                     guest_name: gi?.name, guest_email: gi?.email }
++      const r = await fetch(`${API_URL}/share/${token}/decision${shareSession ? `?share_session=${shareSession}` : ''}`,
++                            { method: 'POST', headers, body: JSON.stringify(body) })
++      if (!r.ok) throw new Error((await r.json().catch(() => ({}))).detail || 'Could not send')
++      setMsg(decision === 'approved' ? 'Approved. Thank you!' : 'Sent. Thank you!')
++      setMode(null); setNote(''); load()
++    } catch (e) {
++      setMsg(e instanceof Error ? e.message : 'Could not send')
++    } finally { setBusy(false) }
++  }
++
++  const mine = decisions[decisions.length - 1]
++  return (
++    <div className="relative flex items-center gap-1.5" data-osc-share-decision>
++      {mine && (
++        <span className="hidden sm:inline text-[11px] text-text-tertiary mr-1">
++          {mine.decision === 'approved' ? 'Approved' : 'Changes requested'} by {mine.name}
++        </span>
++      )}
++      <button type="button" disabled={busy} onClick={() => setMode(mode === 'approved' ? null : 'approved')}
++        className="inline-flex items-center gap-1 h-7 px-2.5 rounded-md text-xs font-semibold text-white disabled:opacity-60"
++        style={{ background: '#15803D' }}>
++        <Check className="h-3.5 w-3.5" /> Approve
++      </button>
++      <button type="button" disabled={busy} onClick={() => setMode(mode === 'rejected' ? null : 'rejected')}
++        className="inline-flex items-center gap-1 h-7 px-2.5 rounded-md text-xs font-medium border border-border text-text-secondary hover:text-text-primary hover:bg-bg-hover">
++        <RotateCcw className="h-3.5 w-3.5" /> <span className="hidden sm:inline">Request changes</span><span className="sm:hidden">Changes</span>
++      </button>
++      {mode && (
++        <div className="absolute right-0 top-9 z-50 w-72 rounded-xl border border-border bg-bg-elevated shadow-2xl p-3 space-y-2">
++          <p className="text-sm text-text-primary font-medium">
++            {mode === 'approved' ? 'Approve this version?' : 'What should change?'}
++          </p>
++          {!known && (
++            <div className="flex gap-2">
++              <input value={name} onChange={(e) => setName(e.target.value)} placeholder="Your name"
++                className="flex-1 min-w-0 h-8 rounded-md border border-border bg-bg-hover px-2 text-xs text-text-primary" />
++              <input value={email} onChange={(e) => setEmail(e.target.value)} placeholder="Email" type="email"
++                className="flex-1 min-w-0 h-8 rounded-md border border-border bg-bg-hover px-2 text-xs text-text-primary" />
++            </div>
++          )}
++          <textarea value={note} onChange={(e) => setNote(e.target.value)} rows={mode === 'rejected' ? 3 : 2}
++            placeholder={mode === 'approved' ? 'Optional note' : 'A short note helps (or leave timecoded comments)'}
++            className="w-full rounded-md border border-border bg-bg-hover px-2 py-1.5 text-xs text-text-primary" />
++          <div className="flex justify-end gap-2">
++            <button type="button" onClick={() => setMode(null)} className="h-7 px-2.5 text-xs text-text-tertiary">Cancel</button>
++            <button type="button" disabled={busy || (!known && (!name.trim() || !email.trim()))}
++              onClick={() => send(mode)}
++              className="inline-flex items-center gap-1 h-7 px-3 rounded-md text-xs font-semibold text-white disabled:opacity-50"
++              style={{ background: mode === 'approved' ? '#15803D' : '#DC2626' }}>
++              {busy && <Loader2 className="h-3 w-3 animate-spin" />}
++              {mode === 'approved' ? 'Approve' : 'Send'}
++            </button>
++          </div>
++        </div>
++      )}
++      {msg && <span className="text-[11px] text-text-secondary ml-1" role="status">{msg}</span>}
++    </div>
++  )
++}
+diff --git a/apps/web/components/share/share-review-screen.tsx b/apps/web/components/share/share-review-screen.tsx
+index 23fc02b..ad2a991 100644
+--- a/apps/web/components/share/share-review-screen.tsx
++++ b/apps/web/components/share/share-review-screen.tsx
+@@ -11,6 +11,7 @@
+  * (#117, #123).
+  */
+ import * as React from 'react'
++import { ShareDecision } from '@/components/osc/share-decision'
+ import { ArrowLeft, Download, Loader2, PanelRightClose, PanelRightOpen } from 'lucide-react'
+ import { useReview, type CreateCommentPayload } from '@/components/review/review-provider'
+ import { useReviewStore } from '@/stores/review-store'
+@@ -268,6 +269,9 @@ function ShareReviewInner({
+           {showVersions && VersionSwitcher && versions.length > 0 && (
+             <VersionSwitcher versions={versions} />
+           )}
++          {/* OSC 0010: client approval from the link (only when the link allows approvals) */}
++          <ShareDecision token={token} shareSession={shareSession} assetId={asset.id}
++            versionId={currentVersion?.id} permission={permission} />
+           {allowDownload && (
+             <button className="flex items-center gap-1.5 h-7 px-3 rounded-md text-xs font-medium text-text-inverse bg-accent hover:bg-accent-hover transition-colors" onClick={() => handleDownload(token, asset.id, shareSession)}>
+               <Download className="h-3 w-3" /> Download

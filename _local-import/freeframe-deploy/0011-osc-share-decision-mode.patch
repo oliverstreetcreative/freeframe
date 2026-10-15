@@ -1,0 +1,181 @@
+diff --git a/apps/api/routers/osc_share_decision.py b/apps/api/routers/osc_share_decision.py
+index fad89fe..2df7fbd 100644
+--- a/apps/api/routers/osc_share_decision.py
++++ b/apps/api/routers/osc_share_decision.py
+@@ -35,6 +35,18 @@ from ..services.permissions import validate_asset_in_share, validate_share_link_
+ 
+ router = APIRouter(tags=["osc_share_decision"])
+ 
++# Fable review 10/3 04:30 #1 [SAM]: the portal may own the ONE approval of record. Until Sam rules,
++# one env var picks the behaviour without a code change:
++#   binding (default, 0010 as built): Approve / Request changes; approval turns the pill green
++#   ok:  non-binding 'Looks good' / 'Needs changes'; recorded + shown, the pill is NOT moved
++#   off: no buttons; the route answers 403
++import os as _os
++
++
++def mode() -> str:
++    m = _os.environ.get("OSC_SHARE_DECISION_MODE", "binding").strip().lower()
++    return m if m in ("binding", "ok", "off") else "binding"
++
+ 
+ class DecisionIn(BaseModel):
+     decision: str
+@@ -66,6 +78,8 @@ def _resolve(db: Session, link, asset_id, version_id):
+ def share_decision(token: str, body: DecisionIn, share_session: Optional[str] = Query(None),
+                    db: Session = Depends(get_db), current_user: Optional[User] = Depends(get_optional_user)):
+     link = validate_share_link_with_session(db, token, share_session=share_session, current_user=current_user)
++    if mode() == "off":
++        raise HTTPException(403, "Approvals from links are turned off")
+     if link.permission != SharePermission.approve:
+         raise HTTPException(403, "This link doesn't allow approvals")
+     decision = (body.decision or "").strip().lower()
+@@ -93,7 +107,10 @@ def share_decision(token: str, body: DecisionIn, share_session: Optional[str] =
+         {"id": str(uuid.uuid4()), "l": str(link.id), "a": str(asset.id), "v": str(version.id),
+          "e": email, "n": name, "s": decision, "note": (body.note or "").strip() or None})
+ 
+-    label = "✅ Approved" if decision == "approved" else "🔁 Changes requested"
++    if mode() == "ok":
++        label = "👍 Looks good (not a sign-off)" if decision == "approved" else "✏️ Needs changes"
++    else:
++        label = "✅ Approved" if decision == "approved" else "🔁 Changes requested"
+     note = (body.note or "").strip()
+     db.add(Comment(asset_id=asset.id, version_id=version.id, author_id=author_id, guest_author_id=guest_id,
+                    body=f"{label}: {note}" if note else label, visibility="public"))
+@@ -101,7 +118,8 @@ def share_decision(token: str, body: DecisionIn, share_session: Optional[str] =
+                              action=ShareActivityAction.approved if decision == "approved" else ShareActivityAction.rejected,
+                              actor_email=email, actor_name=name, asset_id=asset.id, asset_name=asset.name))
+     db.commit()
+-    sync_status(db, asset, version.id)
++    if mode() == "binding":
++        sync_status(db, asset, version.id)
+     event_service.publish_sync(asset.project_id, "approval_updated",
+                                {"asset_id": str(asset.id), "status": decision, "via": "share_link"})
+     return {"decision": decision, "version_id": str(version.id), "asset_status": asset.status.value
+@@ -116,4 +134,5 @@ def share_decisions(token: str, asset_id: Optional[uuid.UUID] = None, version_id
+     asset, version = _resolve(db, link, asset_id, version_id)
+     rows = db.execute(text("SELECT name, status, created_at FROM osc_guest_approvals WHERE version_id = :v "
+                            "ORDER BY created_at"), {"v": str(version.id)}).fetchall()
+-    return [{"name": r[0], "decision": r[1], "at": r[2].isoformat() if r[2] else None} for r in rows]
++    return {"mode": mode(),
++            "decisions": [{"name": r[0], "decision": r[1], "at": r[2].isoformat() if r[2] else None} for r in rows]}
+diff --git a/apps/api/tests/test_osc_share_decision.py b/apps/api/tests/test_osc_share_decision.py
+index eb79232..a1165f6 100644
+--- a/apps/api/tests/test_osc_share_decision.py
++++ b/apps/api/tests/test_osc_share_decision.py
+@@ -18,6 +18,23 @@ def test_a_comment_only_link_cannot_approve(client):
+     assert r.status_code == 403
+ 
+ 
++def test_off_mode_refuses_every_decision(client, monkeypatch):
++    monkeypatch.setenv("OSC_SHARE_DECISION_MODE", "off")
++    with patch(f"{M}.validate_share_link_with_session", return_value=_link(SharePermission.approve)):
++        r = client.post("/share/tok/decision", json={"decision": "approved", "guest_name": "A", "guest_email": "a@x.com"})
++    assert r.status_code == 403
++
++
++def test_mode_defaults_to_binding_and_ignores_junk(monkeypatch):
++    from apps.api.routers import osc_share_decision as m
++    monkeypatch.delenv("OSC_SHARE_DECISION_MODE", raising=False)
++    assert m.mode() == "binding"
++    monkeypatch.setenv("OSC_SHARE_DECISION_MODE", "OK ")
++    assert m.mode() == "ok"
++    monkeypatch.setenv("OSC_SHARE_DECISION_MODE", "maybe")
++    assert m.mode() == "binding"
++
++
+ def test_unknown_decision_is_refused(client):
+     with patch(f"{M}.validate_share_link_with_session", return_value=_link(SharePermission.approve)):
+         r = client.post("/share/tok/decision", json={"decision": "maybe", "guest_name": "A", "guest_email": "a@x.com"})
+diff --git a/apps/web/components/osc/share-decision.tsx b/apps/web/components/osc/share-decision.tsx
+index 0fe346d..c36ef13 100644
+--- a/apps/web/components/osc/share-decision.tsx
++++ b/apps/web/components/osc/share-decision.tsx
+@@ -20,7 +20,8 @@ export function ShareDecision({ token, shareSession, assetId, versionId, permiss
+   token: string; shareSession?: string | null; assetId: string; versionId?: string; permission: string
+ }) {
+   const [decisions, setDecisions] = React.useState<Decision[]>([])
+-  const [mode, setMode] = React.useState<null | 'approved' | 'rejected'>(null)
++  const [mode, setDecisionMode] = React.useState<'binding' | 'ok' | 'off' | null>(null)
++  const [panel, setPanel] = React.useState<null | 'approved' | 'rejected'>(null)
+   const [note, setNote] = React.useState('')
+   const [name, setName] = React.useState('')
+   const [email, setEmail] = React.useState('')
+@@ -31,11 +32,12 @@ export function ShareDecision({ token, shareSession, assetId, versionId, permiss
+   const load = React.useCallback(async () => {
+     try {
+       const r = await fetch(`${API_URL}/share/${token}/decisions?${qs}`)
+-      if (r.ok) setDecisions(await r.json())
++      if (r.ok) { const d = await r.json(); setDecisions(d.decisions ?? []); setDecisionMode(d.mode ?? 'binding') }
+     } catch {}
+   }, [token, qs])
+   React.useEffect(() => { if (permission === 'approve') load() }, [permission, load])
+-  if (permission !== 'approve') return null
++  if (permission !== 'approve' || mode === null || mode === 'off') return null
++  const ok = mode === 'ok'
+ 
+   const signedIn = typeof window !== 'undefined' && !!localStorage.getItem('ff_access_token')
+   const known = signedIn || !!guestIdentity()
+@@ -57,7 +59,7 @@ export function ShareDecision({ token, shareSession, assetId, versionId, permiss
+                             { method: 'POST', headers, body: JSON.stringify(body) })
+       if (!r.ok) throw new Error((await r.json().catch(() => ({}))).detail || 'Could not send')
+       setMsg(decision === 'approved' ? 'Approved. Thank you!' : 'Sent. Thank you!')
+-      setMode(null); setNote(''); load()
++      setPanel(null); setNote(''); load()
+     } catch (e) {
+       setMsg(e instanceof Error ? e.message : 'Could not send')
+     } finally { setBusy(false) }
+@@ -68,22 +70,22 @@ export function ShareDecision({ token, shareSession, assetId, versionId, permiss
+     <div className="relative flex items-center gap-1.5" data-osc-share-decision>
+       {mine && (
+         <span className="hidden sm:inline text-[11px] text-text-tertiary mr-1">
+-          {mine.decision === 'approved' ? 'Approved' : 'Changes requested'} by {mine.name}
++          {mine.decision === 'approved' ? (ok ? 'Looks good to' : 'Approved by') : (ok ? 'Needs changes from' : 'Changes requested by')} {mine.name}
+         </span>
+       )}
+-      <button type="button" disabled={busy} onClick={() => setMode(mode === 'approved' ? null : 'approved')}
++      <button type="button" disabled={busy} onClick={() => setPanel(panel === 'approved' ? null : 'approved')}
+         className="inline-flex items-center gap-1 h-7 px-2.5 rounded-md text-xs font-semibold text-white disabled:opacity-60"
+         style={{ background: '#15803D' }}>
+-        <Check className="h-3.5 w-3.5" /> Approve
++        <Check className="h-3.5 w-3.5" /> {ok ? 'Looks good' : 'Approve'}
+       </button>
+-      <button type="button" disabled={busy} onClick={() => setMode(mode === 'rejected' ? null : 'rejected')}
++      <button type="button" disabled={busy} onClick={() => setPanel(panel === 'rejected' ? null : 'rejected')}
+         className="inline-flex items-center gap-1 h-7 px-2.5 rounded-md text-xs font-medium border border-border text-text-secondary hover:text-text-primary hover:bg-bg-hover">
+-        <RotateCcw className="h-3.5 w-3.5" /> <span className="hidden sm:inline">Request changes</span><span className="sm:hidden">Changes</span>
++        <RotateCcw className="h-3.5 w-3.5" /> <span className="hidden sm:inline">{ok ? 'Needs changes' : 'Request changes'}</span><span className="sm:hidden">Changes</span>
+       </button>
+-      {mode && (
++      {panel && (
+         <div className="absolute right-0 top-9 z-50 w-72 rounded-xl border border-border bg-bg-elevated shadow-2xl p-3 space-y-2">
+           <p className="text-sm text-text-primary font-medium">
+-            {mode === 'approved' ? 'Approve this version?' : 'What should change?'}
++            {panel === 'approved' ? (ok ? 'Looks good? (not a final sign-off)' : 'Approve this version?') : 'What should change?'}
+           </p>
+           {!known && (
+             <div className="flex gap-2">
+@@ -93,17 +95,17 @@ export function ShareDecision({ token, shareSession, assetId, versionId, permiss
+                 className="flex-1 min-w-0 h-8 rounded-md border border-border bg-bg-hover px-2 text-xs text-text-primary" />
+             </div>
+           )}
+-          <textarea value={note} onChange={(e) => setNote(e.target.value)} rows={mode === 'rejected' ? 3 : 2}
+-            placeholder={mode === 'approved' ? 'Optional note' : 'A short note helps (or leave timecoded comments)'}
++          <textarea value={note} onChange={(e) => setNote(e.target.value)} rows={panel === 'rejected' ? 3 : 2}
++            placeholder={panel === 'approved' ? 'Optional note' : 'A short note helps (or leave timecoded comments)'}
+             className="w-full rounded-md border border-border bg-bg-hover px-2 py-1.5 text-xs text-text-primary" />
+           <div className="flex justify-end gap-2">
+-            <button type="button" onClick={() => setMode(null)} className="h-7 px-2.5 text-xs text-text-tertiary">Cancel</button>
++            <button type="button" onClick={() => setPanel(null)} className="h-7 px-2.5 text-xs text-text-tertiary">Cancel</button>
+             <button type="button" disabled={busy || (!known && (!name.trim() || !email.trim()))}
+-              onClick={() => send(mode)}
++              onClick={() => send(panel)}
+               className="inline-flex items-center gap-1 h-7 px-3 rounded-md text-xs font-semibold text-white disabled:opacity-50"
+-              style={{ background: mode === 'approved' ? '#15803D' : '#DC2626' }}>
++              style={{ background: panel === 'approved' ? '#15803D' : '#DC2626' }}>
+               {busy && <Loader2 className="h-3 w-3 animate-spin" />}
+-              {mode === 'approved' ? 'Approve' : 'Send'}
++              {panel === 'approved' ? (ok ? 'Looks good' : 'Approve') : 'Send'}
+             </button>
+           </div>
+         </div>

@@ -1,0 +1,445 @@
+diff --git a/apps/api/models/asset.py b/apps/api/models/asset.py
+index a2639d1..68e54fe 100644
+--- a/apps/api/models/asset.py
++++ b/apps/api/models/asset.py
+@@ -22,6 +22,8 @@ class AssetStatus(str, PyEnum):
+     approved = "approved"
+     rejected = "rejected"
+     archived = "archived"
++    # OSC status labels: "Client review". DB enum value added by osc_status_ddl.py at API start.
++    client_review = "client_review"
+ 
+ class ProcessingStatus(str, PyEnum):
+     uploading = "uploading"
+diff --git a/apps/api/osc_status_ddl.py b/apps/api/osc_status_ddl.py
+new file mode 100644
+index 0000000..350a411
+--- /dev/null
++++ b/apps/api/osc_status_ddl.py
+@@ -0,0 +1,21 @@
++"""OSC status labels: add the 'client_review' value to the assetstatus Postgres enum.
++
++Idempotent (ADD VALUE IF NOT EXISTS) and kept OUT of alembic on purpose: an extra revision in
++our overlay would fork upstream's migration chain into two heads and break `alembic upgrade head`
++on the next upstream release. Runs once at API start, after alembic. ALTER TYPE ... ADD VALUE
++cannot run inside a transaction block on older Postgres, so it uses autocommit.
++"""
++from sqlalchemy import create_engine, text
++
++from apps.api.config import settings
++
++
++def main() -> None:
++    engine = create_engine(settings.database_url, isolation_level="AUTOCOMMIT")
++    with engine.connect() as conn:
++        conn.execute(text("ALTER TYPE assetstatus ADD VALUE IF NOT EXISTS 'client_review'"))
++    print("osc_status_ddl: assetstatus has client_review")
++
++
++if __name__ == "__main__":
++    main()
+diff --git a/apps/api/routers/approvals.py b/apps/api/routers/approvals.py
+index 01499ea..4407965 100644
+--- a/apps/api/routers/approvals.py
++++ b/apps/api/routers/approvals.py
+@@ -48,6 +48,7 @@ def _upsert_approval(
+         existing.note = note
+         db.commit()
+         db.refresh(existing)
++        _osc_sync_status(db, asset, version_id)
+         return existing
+ 
+     approval = Approval(
+@@ -60,9 +61,40 @@ def _upsert_approval(
+     db.add(approval)
+     db.commit()
+     db.refresh(approval)
++    _osc_sync_status(db, asset, version_id)
+     return approval
+ 
+ 
++def _osc_sync_status(db: Session, asset: Asset, version_id: uuid.UUID) -> None:
++    """OSC status labels auto-rule: reviewer decisions on the LATEST version drive the label.
++    Any "changes requested" (rejection) on it -> Changes requested; otherwise any approval -> Approved.
++    Decisions on an older version never move the label (a new version already reset it to
++    Needs review). FreeFrame has no "required reviewers", so one approval is enough today."""
++    from ..models.asset import AssetStatus, AssetVersion
++
++    latest = (
++        db.query(AssetVersion)
++        .filter(AssetVersion.asset_id == asset.id, AssetVersion.deleted_at.is_(None))
++        .order_by(AssetVersion.version_number.desc())
++        .first()
++    )
++    if not latest or latest.id != version_id:
++        return
++    decisions = {
++        a.status
++        for a in db.query(Approval).filter(
++            Approval.version_id == version_id, Approval.deleted_at.is_(None)
++        )
++    }
++    if ApprovalStatus.rejected in decisions:
++        asset.status = AssetStatus.rejected
++    elif ApprovalStatus.approved in decisions:
++        asset.status = AssetStatus.approved
++    else:
++        return
++    db.commit()
++
++
+ @router.post("/assets/{asset_id}/approve", response_model=ApprovalResponse)
+ def approve_asset(
+     asset_id: uuid.UUID,
+diff --git a/apps/api/routers/upload.py b/apps/api/routers/upload.py
+index 1f7c1c9..7604ba9 100644
+--- a/apps/api/routers/upload.py
++++ b/apps/api/routers/upload.py
+@@ -9,7 +9,7 @@ from datetime import datetime, timedelta, timezone
+ from ..database import get_db
+ from ..middleware.auth import get_current_user
+ from ..models.user import User
+-from ..models.asset import Asset, AssetVersion, MediaFile, AssetType, ProcessingStatus, FileType
++from ..models.asset import Asset, AssetVersion, MediaFile, AssetType, ProcessingStatus, FileType, AssetStatus
+ from ..models.folder import Folder
+ from ..models.project import Project
+ from ..services.s3_service import (
+@@ -97,6 +97,8 @@ def initiate_upload(
+     )
+     db.add(version)
+     db.flush()
++    # OSC status labels: every new upload / new version lands as "Needs review".
++    asset.status = AssetStatus.in_review
+ 
+     ext = os.path.splitext(body.original_filename)[1].lower()
+     s3_key = f"raw/{body.project_id}/{asset.id}/{version.id}/original{ext}"
+diff --git a/apps/web/app/(dashboard)/projects/[id]/assets/[assetId]/page.tsx b/apps/web/app/(dashboard)/projects/[id]/assets/[assetId]/page.tsx
+index 416548c..1b12886 100644
+--- a/apps/web/app/(dashboard)/projects/[id]/assets/[assetId]/page.tsx
++++ b/apps/web/app/(dashboard)/projects/[id]/assets/[assetId]/page.tsx
+@@ -16,6 +16,7 @@ import { CommentPanel } from '@/components/review/comment-panel'
+ import { CommentInput } from '@/components/review/comment-input'
+ // ApprovalBar removed for now
+ import { VersionSwitcher } from '@/components/review/version-switcher'
++import { StatusPill } from '@/components/osc/status'
+ import { ShareDialog } from '@/components/review/share-dialog'
+ import { CompareOverlay } from '@/components/review/compare/compare-overlay'
+ import { useReviewStore } from '@/stores/review-store'
+@@ -602,6 +603,7 @@ function ReviewScreenInner({ projectId }: { projectId: string }) {
+               setTimeout(() => refetchVersions(), 2500)
+             }}
+           />
++          {asset && <StatusPill asset={asset} />}
+           <VersionSwitcher versions={versions} />
+           {asset && canCompare(asset.asset_type, versions) && (
+             <button
+diff --git a/apps/web/components/osc/status.tsx b/apps/web/components/osc/status.tsx
+new file mode 100644
+index 0000000..b00d30b
+--- /dev/null
++++ b/apps/web/components/osc/status.tsx
+@@ -0,0 +1,177 @@
++'use client'
++
++/**
++ * OSC status labels (Sam, 10/2/26: "turning things green is helpful").
++ *
++ * One status per asset, shown as a coloured pill on the grid thumbnail, the list row and the
++ * player bar. Staff click it to change it; it saves through the existing PATCH /assets/{id}
++ * (editor role). It rides on FreeFrame's own `asset.status` field. The vocabulary is OSC's and
++ * shared with the client website:
++ *
++ *   in_review  → Needs review        (orange, OSC accent)  ← every new upload / new version
++ *   draft      → In progress         (blue)
++ *   client_review → Client review    (purple)              ← the one value OSC adds
++ *   rejected   → Changes requested   (red)                 ← a reviewer requests changes
++ *   approved   → Approved            (green)               ← a reviewer approves the latest version
++ *
++ * Kept in this one file (plus one-line mounts) so upstream merges stay cheap.
++ * Colours are inline so Tailwind's purge can't drop them. Every pill passes WCAG AA:
++ * orange/#1A1206 6.09, blue/white 5.17, purple/white 5.70, red/white 4.83, green/white 5.02.
++ */
++import * as React from 'react'
++import * as DropdownMenu from '@radix-ui/react-dropdown-menu'
++import { Check, ChevronDown } from 'lucide-react'
++import { api } from '@/lib/api'
++import { cn } from '@/lib/utils'
++import type { Asset, AssetStatus } from '@/types'
++
++export type OscStatus = AssetStatus
++
++export const OSC_STATUSES: { value: OscStatus; label: string; bg: string; fg: string }[] = [
++  { value: 'in_review', label: 'Needs review', bg: '#E07830', fg: '#1A1206' },
++  { value: 'draft', label: 'In progress', bg: '#2563EB', fg: '#FFFFFF' },
++  { value: 'client_review', label: 'Client review', bg: '#7C3AED', fg: '#FFFFFF' },
++  { value: 'rejected', label: 'Changes requested', bg: '#DC2626', fg: '#FFFFFF' },
++  { value: 'approved', label: 'Approved', bg: '#15803D', fg: '#FFFFFF' },
++]
++const ARCHIVED = { value: 'archived' as OscStatus, label: 'Archived', bg: '#52525B', fg: '#FFFFFF' }
++
++export function statusMeta(s: OscStatus) {
++  return OSC_STATUSES.find((x) => x.value === s) ?? ARCHIVED
++}
++
++/** Grid sort order: what needs attention first, done last. */
++export const OSC_STATUS_ORDER: Record<OscStatus, number> = {
++  in_review: 0, rejected: 1, client_review: 2, draft: 3, approved: 4, archived: 5,
++}
++
++// ---- tiny shared store: local overrides after a change + the grid's status filter ----------
++type State = { overrides: Record<string, OscStatus>; filter: Set<OscStatus> }
++let state: State = { overrides: {}, filter: new Set() }
++const listeners = new Set<() => void>()
++const emit = () => listeners.forEach((l) => l())
++function subscribe(l: () => void) { listeners.add(l); return () => { listeners.delete(l) } }
++function useOscState<T>(pick: (s: State) => T): T {
++  return React.useSyncExternalStore(subscribe, () => pick(state), () => pick(state))
++}
++
++/** The status to show/sort/filter by: a just-made change wins over the fetched asset. */
++export function effectiveStatus(asset: Pick<Asset, 'id' | 'status'>): OscStatus {
++  return state.overrides[asset.id] ?? asset.status
++}
++export function useEffectiveStatus(asset: Pick<Asset, 'id' | 'status'>): OscStatus {
++  return useOscState((s) => s.overrides[asset.id] ?? asset.status)
++}
++export function useOscStatusVersion(): unknown {
++  // Changes identity whenever any override or the filter changes — a memo dependency for the grid.
++  return useOscState((s) => s)
++}
++
++export function useStatusFilter() {
++  const filter = useOscState((s) => s.filter)
++  const toggle = React.useCallback((v: OscStatus) => {
++    const next = new Set(state.filter)
++    if (next.has(v)) next.delete(v)
++    else next.add(v)
++    state = { ...state, filter: next }
++    emit()
++  }, [])
++  const clear = React.useCallback(() => { state = { ...state, filter: new Set() }; emit() }, [])
++  return { filter, toggle, clear }
++}
++export function passesStatusFilter(asset: Pick<Asset, 'id' | 'status'>): boolean {
++  return state.filter.size === 0 || state.filter.has(effectiveStatus(asset))
++}
++
++async function setStatus(assetId: string, prev: OscStatus, next: OscStatus) {
++  state = { ...state, overrides: { ...state.overrides, [assetId]: next } }
++  emit()
++  try {
++    await api.patch(`/assets/${assetId}`, { status: next })
++  } catch {
++    state = { ...state, overrides: { ...state.overrides, [assetId]: prev } }
++    emit()
++  }
++}
++
++// ---- the pill ---------------------------------------------------------------------------------
++export function StatusPill({
++  asset, editable = true, size = 'sm', className,
++}: { asset: Pick<Asset, 'id' | 'status'>; editable?: boolean; size?: 'xs' | 'sm'; className?: string }) {
++  const current = useEffectiveStatus(asset)
++  const meta = statusMeta(current)
++  const pill = (
++    <span
++      data-osc-status={current}
++      className={cn(
++        'inline-flex items-center gap-1 rounded-full font-semibold leading-none whitespace-nowrap select-none',
++        size === 'xs' ? 'px-2 py-[3px] text-[10px]' : 'px-2.5 py-1 text-xs',
++        editable && 'cursor-pointer',
++        className,
++      )}
++      style={{ background: meta.bg, color: meta.fg }}
++    >
++      {meta.label}
++      {editable && <ChevronDown className={size === 'xs' ? 'h-2.5 w-2.5' : 'h-3 w-3'} style={{ color: meta.fg }} />}
++    </span>
++  )
++  if (!editable) return pill
++  return (
++    <DropdownMenu.Root>
++      <DropdownMenu.Trigger asChild>
++        <button type="button" aria-label={`Status: ${meta.label}. Change status`}
++          onClick={(e) => e.stopPropagation()} className="outline-none rounded-full focus-visible:ring-2 focus-visible:ring-accent">
++          {pill}
++        </button>
++      </DropdownMenu.Trigger>
++      <DropdownMenu.Portal>
++        <DropdownMenu.Content align="start" sideOffset={6} onClick={(e) => e.stopPropagation()}
++          className="z-[100] min-w-[190px] rounded-xl border border-border bg-bg-elevated shadow-2xl py-1.5">
++          {OSC_STATUSES.map((s) => (
++            <DropdownMenu.Item key={s.value}
++              onSelect={() => { if (s.value !== current) setStatus(asset.id, current, s.value) }}
++              className="flex items-center gap-2.5 mx-1 px-2.5 py-2 rounded-lg text-sm text-text-secondary hover:bg-bg-hover hover:text-text-primary cursor-pointer outline-none">
++              <span className="h-2.5 w-2.5 rounded-full shrink-0" style={{ background: s.bg }} />
++              <span className="flex-1">{s.label}</span>
++              {s.value === current && <Check className="h-3.5 w-3.5 text-text-tertiary" />}
++            </DropdownMenu.Item>
++          ))}
++        </DropdownMenu.Content>
++      </DropdownMenu.Portal>
++    </DropdownMenu.Root>
++  )
++}
++
++// ---- filter bar above the grid -----------------------------------------------------------------
++export function StatusFilterBar({ assets }: { assets: Pick<Asset, 'id' | 'status'>[] }) {
++  const { filter, toggle, clear } = useStatusFilter()
++  useOscStatusVersion()
++  const counts = new Map<OscStatus, number>()
++  assets.forEach((a) => { const s = effectiveStatus(a); counts.set(s, (counts.get(s) ?? 0) + 1) })
++  if (assets.length === 0) return null
++  return (
++    <div className="flex flex-wrap items-center gap-1.5 mb-3" role="group" aria-label="Filter by status">
++      <span className="text-xs text-text-tertiary mr-1">Status</span>
++      {OSC_STATUSES.map((s) => {
++        const on = filter.has(s.value)
++        const n = counts.get(s.value) ?? 0
++        return (
++          <button key={s.value} type="button" onClick={() => toggle(s.value)} aria-pressed={on}
++            className={cn('inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-xs transition-colors',
++              on ? 'border-transparent' : 'border-border text-text-secondary hover:text-text-primary hover:bg-bg-hover',
++              n === 0 && !on && 'opacity-50')}
++            style={on ? { background: s.bg, color: s.fg } : undefined}>
++            {!on && <span className="h-2 w-2 rounded-full" style={{ background: s.bg }} />}
++            {s.label}
++            <span className="tabular-nums opacity-80">{n}</span>
++          </button>
++        )
++      })}
++      {filter.size > 0 && (
++        <button type="button" onClick={clear} className="text-xs text-text-tertiary hover:text-text-primary ml-1 underline">
++          Clear
++        </button>
++      )}
++    </div>
++  )
++}
+diff --git a/apps/web/components/projects/asset-card.tsx b/apps/web/components/projects/asset-card.tsx
+index 7462b7d..99ac9c8 100644
+--- a/apps/web/components/projects/asset-card.tsx
++++ b/apps/web/components/projects/asset-card.tsx
+@@ -6,6 +6,7 @@ import { Film, Music, Image as ImageIcon, Images, MessageSquare, MoreHorizontal,
+ import { cn, formatRelativeTime, formatBytes } from '@/lib/utils'
+ import type { Asset, AssetType, User } from '@/types'
+ import type { AspectRatio, ThumbnailScale, TitleLines } from '@/stores/view-store'
++import { StatusPill } from '@/components/osc/status'
+ 
+ const assetTypeIcons: Record<AssetType, React.ElementType> = {
+   video: Film,
+@@ -139,6 +140,9 @@ export function AssetCard({
+           </button>
+         )}
+ 
++        {/* OSC status label — top-right */}
++        <div className="absolute top-2 right-2"><StatusPill asset={asset} size="xs" /></div>
++
+         {/* Duration badge — bottom-right (for video/audio) */}
+         {duration != null && duration > 0 && (
+           <span className="absolute bottom-2 right-2 rounded bg-black/70 px-1.5 py-0.5 text-2xs font-medium text-white tabular-nums backdrop-blur-sm">
+diff --git a/apps/web/components/projects/asset-grid.tsx b/apps/web/components/projects/asset-grid.tsx
+index 3c2f744..cdd1a79 100644
+--- a/apps/web/components/projects/asset-grid.tsx
++++ b/apps/web/components/projects/asset-grid.tsx
+@@ -8,6 +8,7 @@ import { Button } from '@/components/ui/button'
+ import { Avatar } from '@/components/shared/avatar'
+ import { EmptyState } from '@/components/shared/empty-state'
+ import { AssetCard } from './asset-card'
++import { OSC_STATUS_ORDER, StatusPill, StatusFilterBar, effectiveStatus, passesStatusFilter, useOscStatusVersion } from '@/components/osc/status'
+ import { FolderCard } from './folder-card'
+ import { AppearancePopover } from './appearance-popover'
+ import { SortPopover } from './sort-popover'
+@@ -26,13 +27,8 @@ const assetTypeIcons: Record<string, React.ElementType> = {
+   image_carousel: Images,
+ }
+ 
+-const statusOrder: Record<AssetStatus, number> = {
+-  in_review: 0,
+-  draft: 1,
+-  approved: 2,
+-  rejected: 3,
+-  archived: 4,
+-}
++// OSC status labels: order + effective status come from components/osc/status.tsx
++const statusOrder: Record<AssetStatus, number> = OSC_STATUS_ORDER
+ 
+ interface AssetGridProps {
+   assets: Asset[]
+@@ -183,8 +179,9 @@ export function AssetGrid({
+   const totalSelected = selectedAssetIds.size + selectedFolderIds.size
+   const selectedTotalSize = Array.from(selectedAssetIds).reduce((sum, id) => sum + (fileSizes[id] ?? 0), 0)
+ 
++  const oscStatusVersion = useOscStatusVersion()
+   const filtered = React.useMemo(() => {
+-    let result = [...assets]
++    let result = assets.filter(passesStatusFilter)
+ 
+     if (sortKey !== 'custom') {
+       result.sort((a, b) => {
+@@ -194,7 +191,7 @@ export function AssetGrid({
+         } else if (sortKey === 'name') {
+           cmp = a.name.localeCompare(b.name)
+         } else if (sortKey === 'status') {
+-          cmp = statusOrder[a.status] - statusOrder[b.status]
++          cmp = statusOrder[effectiveStatus(a)] - statusOrder[effectiveStatus(b)]
+         } else if (sortKey === 'type') {
+           cmp = a.asset_type.localeCompare(b.asset_type)
+         }
+@@ -203,7 +200,7 @@ export function AssetGrid({
+     }
+ 
+     return result
+-  }, [assets, sortKey, sortDirection])
++  }, [assets, sortKey, sortDirection, oscStatusVersion])
+ 
+   const showFolders = !flattenFolders && folders && folders.length > 0
+ 
+@@ -276,6 +273,9 @@ export function AssetGrid({
+         </div>
+       )}
+ 
++      {/* OSC status labels: filter chips (from the unfiltered list, so they never vanish) */}
++      <StatusFilterBar assets={assets} />
++
+       {/* ─── Grid view: folders section ──────────────────────────────── */}
+       {showFolders && layout === 'grid' && (
+         <>
+@@ -560,6 +560,7 @@ export function AssetGrid({
+                 <div className="flex-1 min-w-0">
+                   <p className="text-sm font-medium text-text-primary truncate leading-snug">{asset.name}</p>
+                 </div>
++                <div className="shrink-0"><StatusPill asset={asset} size="xs" /></div>
+                 {/* Uploader */}
+                 {showUploader && (
+                   <div className="hidden md:block w-32 text-xs text-text-tertiary truncate shrink-0">
+diff --git a/apps/web/components/shared/badge.tsx b/apps/web/components/shared/badge.tsx
+index 058c4ea..7765c97 100644
+--- a/apps/web/components/shared/badge.tsx
++++ b/apps/web/components/shared/badge.tsx
+@@ -32,6 +32,12 @@ const statusConfig: Record<AssetStatus, { label: string; dot: string; bg: string
+     bg: 'bg-status-error/10',
+     text: 'text-status-error',
+   },
++  client_review: {
++    label: 'Client review',
++    dot: 'bg-text-tertiary',
++    bg: 'bg-bg-tertiary',
++    text: 'text-text-secondary',
++  },
+   archived: {
+     label: 'Archived',
+     dot: 'bg-text-tertiary',
+diff --git a/apps/web/types/index.ts b/apps/web/types/index.ts
+index d85727a..e97a741 100644
+--- a/apps/web/types/index.ts
++++ b/apps/web/types/index.ts
+@@ -2,7 +2,7 @@
+ 
+ export type AssetType = "image" | "image_carousel" | "audio" | "video";
+ 
+-export type AssetStatus = "draft" | "in_review" | "approved" | "rejected" | "archived";
++export type AssetStatus = "draft" | "in_review" | "approved" | "rejected" | "archived" | "client_review";
+ 
+ export type AssetVersionStatus = "uploading" | "processing" | "ready" | "failed";
+ 

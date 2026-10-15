@@ -1,0 +1,444 @@
+diff --git a/apps/api/routers/comments.py b/apps/api/routers/comments.py
+index ab04b40..eda6340 100644
+--- a/apps/api/routers/comments.py
++++ b/apps/api/routers/comments.py
+@@ -41,6 +41,7 @@ from ..services.permissions import (
+ )
+ from ..tasks.email_tasks import send_mention_email, send_comment_email
+ from ..tasks.celery_app import send_task_safe
++from ..services.osc_visibility import is_staff, resolve_visibility
+ 
+ log = logging.getLogger(__name__)
+ 
+@@ -303,6 +304,9 @@ def _create_mentions(db: Session, comment: Comment, asset: Asset, body: str, aut
+     # (or a guest via a share link) could @mention an arbitrary user id/email and have their
+     # name, the asset name, and a comment preview emailed to someone with no access to either.
+     mentioned_users = [u for u in mentioned_users if can_access_asset(db, asset, u)]
++    # OSC: an internal note's preview is never emailed to a non-staff (client) account.
++    if comment.visibility == "internal":
++        mentioned_users = [u for u in mentioned_users if is_staff(db, asset.project_id, u)]
+ 
+     for user in mentioned_users:
+         mention = Mention(comment_id=comment.id, mentioned_user_id=user.id)
+@@ -347,8 +351,14 @@ def list_comments(
+         query = query.filter(Comment.version_id == version_id)
+     if visibility and visibility in ("public", "internal"):
+         query = query.filter(Comment.visibility == visibility)
++    # OSC: internal notes are staff-only. Client accounts (reviewer/viewer) never receive them,
++    # nor any reply under them (exclude_internal drops the whole subtree).
++    staff = is_staff(db, asset.project_id, current_user)
++    if not staff:
++        query = query.filter(Comment.visibility != "internal")
+     top_level = query.order_by(Comment.created_at).all()
+-    return _build_comment_responses_batched(asset_id, top_level, db, current_user_id=current_user.id)
++    return _build_comment_responses_batched(asset_id, top_level, db, current_user_id=current_user.id,
++                                            exclude_internal=not staff)
+ 
+ 
+ @router.post("/assets/{asset_id}/comments", response_model=CommentResponse, status_code=status.HTTP_201_CREATED)
+@@ -374,6 +384,7 @@ def create_comment(
+     # inside a thread on an asset the author cannot open. The weaker failure is
+     # the same bug pointed at a deleted parent: a 201 for a reply no read path
+     # will ever return.
++    parent = None
+     if body.parent_id is not None:
+         parent = db.query(Comment).filter(
+             Comment.id == body.parent_id,
+@@ -391,7 +402,8 @@ def create_comment(
+         timecode_start=body.timecode_start,
+         timecode_end=body.timecode_end,
+         body=body.body,
+-        visibility=body.visibility or "public",
++        # OSC: enforced server-side (staff only; replies to internal stay internal; never downgraded)
++        visibility=resolve_visibility(db, asset.project_id, current_user, body.visibility, parent),
+     )
+     db.add(comment)
+     db.flush()
+@@ -462,7 +474,8 @@ def reply_to_comment(
+         body=body.body,
+         timecode_start=body.timecode_start,
+         timecode_end=body.timecode_end,
+-        visibility=body.visibility or "public",
++        # OSC: enforced server-side; a reply to an internal note is internal
++        visibility=resolve_visibility(db, asset.project_id, current_user, body.visibility, parent),
+     )
+     db.add(reply)
+     db.flush()
+@@ -739,7 +752,7 @@ def comment_deep_link(
+         Comment.asset_id == asset_id,
+         Comment.deleted_at.is_(None),
+     ).first()
+-    if not comment:
++    if not comment or (comment.visibility == "internal" and not is_staff(db, asset.project_id, current_user)):
+         raise HTTPException(status_code=404, detail="Comment not found")
+ 
+     url = f"{settings.frontend_url}/assets/{asset_id}?comment={comment_id}"
+@@ -846,6 +859,15 @@ def export_comments(
+         Comment.version_id == version.id,
+         Comment.deleted_at.is_(None),
+     ).order_by(Comment.created_at.asc()).all()
++    # OSC: a client account exporting markers never gets internal notes (or replies under them).
++    if not is_staff(db, asset.project_id, current_user):
++        hidden = {c.id for c in comments if c.visibility == "internal"}
++        changed = True
++        while changed:
++            more = {c.id for c in comments if c.parent_id in hidden and c.id not in hidden}
++            hidden |= more
++            changed = bool(more)
++        comments = [c for c in comments if c.id not in hidden]
+ 
+     user_ids = {c.author_id for c in comments if c.author_id}
+     guest_ids = {c.guest_author_id for c in comments if c.guest_author_id}
+@@ -1025,6 +1047,18 @@ def guest_comment(
+             db.flush()
+         guest_author_id = guest.id
+ 
++    # OSC: a reply's parent must be a live comment on THIS asset. (Upstream wrote parent_id straight
++    # through on this route.) A reply under an internal note is internal, so non-staff get 403.
++    parent = None
++    if body.parent_id is not None:
++        parent = db.query(Comment).filter(
++            Comment.id == body.parent_id,
++            Comment.asset_id == asset.id,
++            Comment.deleted_at.is_(None),
++        ).first()
++        if not parent:
++            raise HTTPException(status_code=400, detail="parent_id does not belong to this asset")
++
+     comment = Comment(
+         asset_id=asset.id,
+         version_id=version_id,
+@@ -1034,6 +1068,8 @@ def guest_comment(
+         timecode_start=body.timecode_start,
+         timecode_end=body.timecode_end,
+         body=body.body,
++        # OSC: honour "internal" for signed-in staff only; guests/clients get 403, never a silent public
++        visibility=resolve_visibility(db, asset.project_id, current_user, body.visibility, parent),
+     )
+     db.add(comment)
+     db.flush()
+diff --git a/apps/api/schemas/comment.py b/apps/api/schemas/comment.py
+index f4d8367..715eb9f 100644
+--- a/apps/api/schemas/comment.py
++++ b/apps/api/schemas/comment.py
+@@ -26,6 +26,9 @@ class GuestCommentCreate(BaseModel):
+     timecode_end: Optional[float] = None
+     body: str
+     annotation: Optional[AnnotationData] = None
++    # OSC: was missing, so a signed-in staffer choosing "Internal" on a share page was silently
++    # saved as public. Now honoured for staff and refused (403) for everyone else.
++    visibility: Optional[str] = "public"
+     guest_email: Optional[str] = None  # Not needed if user is logged in
+     guest_name: Optional[str] = None
+ 
+diff --git a/apps/api/services/osc_visibility.py b/apps/api/services/osc_visibility.py
+new file mode 100644
+index 0000000..2dde4fa
+--- /dev/null
++++ b/apps/api/services/osc_visibility.py
+@@ -0,0 +1,44 @@
++"""Internal-comment enforcement (OSC, Sam 10/3 00:03: "I just made an internal comment but it
++posted as Public").
++
++The rule, enforced on the SERVER whatever the UI sends:
++  * Only STAFF may write or read internal comments. Staff = a superadmin, or an owner/editor on
++    the project. Reviewers/viewers (client accounts) and share-link guests are never staff.
++  * A non-staff request for "internal" is REFUSED (403), never quietly saved as public. A silent
++    downgrade is exactly how the leak happened.
++  * A reply to an internal comment is internal, whatever was asked.
++  * Unknown values are refused (400); missing means public.
++"""
++import uuid
++from typing import Optional
++
++from fastapi import HTTPException, status
++from sqlalchemy.orm import Session
++
++from ..models.project import ProjectRole
++from ..models.user import User
++from .permissions import get_project_member
++
++STAFF_ROLES = (ProjectRole.owner, ProjectRole.editor)
++
++
++def is_staff(db: Session, project_id: uuid.UUID, user: Optional[User]) -> bool:
++    if user is None:
++        return False
++    if getattr(user, "is_superadmin", False):
++        return True
++    member = get_project_member(db, project_id, user.id)
++    return bool(member and member.role in STAFF_ROLES)
++
++
++def resolve_visibility(db: Session, project_id: uuid.UUID, user: Optional[User],
++                       requested: Optional[str], parent=None) -> str:
++    requested = (requested or "public").strip().lower()
++    if requested not in ("public", "internal"):
++        raise HTTPException(status.HTTP_400_BAD_REQUEST, "visibility must be 'public' or 'internal'")
++    if parent is not None and getattr(parent, "visibility", "public") == "internal":
++        requested = "internal"
++    if requested == "internal" and not is_staff(db, project_id, user):
++        raise HTTPException(status.HTTP_403_FORBIDDEN,
++                            "Internal notes are for OSC staff only; this was not posted.")
++    return requested
+diff --git a/apps/api/tests/test_comments_export_endpoint.py b/apps/api/tests/test_comments_export_endpoint.py
+index 0083b7b..a479df0 100644
+--- a/apps/api/tests/test_comments_export_endpoint.py
++++ b/apps/api/tests/test_comments_export_endpoint.py
+@@ -5,6 +5,17 @@ from unittest.mock import MagicMock, patch
+ 
+ from apps.api.models.asset import AssetType, ProcessingStatus
+ 
++import pytest
++
++
++@pytest.fixture(autouse=True)
++def _exporter_is_staff():
++    # OSC: export now asks whether the caller is staff (internal notes are staff-only). These tests
++    # script db.first() call-by-call, so stub that lookup: the exporter here is staff, which is the
++    # behaviour these tests were written against (every comment exported).
++    with patch("apps.api.routers.comments.is_staff", return_value=True):
++        yield
++
+ 
+ def _asset(asset_type=AssetType.video):
+     a = MagicMock()
+diff --git a/apps/api/tests/test_osc_visibility.py b/apps/api/tests/test_osc_visibility.py
+new file mode 100644
+index 0000000..2c3c635
+--- /dev/null
++++ b/apps/api/tests/test_osc_visibility.py
+@@ -0,0 +1,86 @@
++"""OSC: internal comments are enforced server-side (regression for Sam 10/3/26 00:03,
++"I just made an internal comment but it posted as Public").
++
++Root cause: the share-link comment route's schema had no `visibility` field, so a signed-in
++staffer choosing "Internal" on a share page was silently saved as public. These tests pin the
++rule in services/osc_visibility.py and the schema fix.
++"""
++import uuid
++from types import SimpleNamespace
++from unittest.mock import patch
++
++import pytest
++from fastapi import HTTPException
++
++from apps.api.models.project import ProjectRole
++from apps.api.schemas.comment import GuestCommentCreate
++from apps.api.services import osc_visibility as ov
++
++PID = uuid.uuid4()
++
++
++def user(superadmin=False):
++    return SimpleNamespace(id=uuid.uuid4(), is_superadmin=superadmin)
++
++
++def member(role):
++    return SimpleNamespace(role=role) if role else None
++
++
++@pytest.mark.parametrize("role,staff", [
++    (ProjectRole.owner, True), (ProjectRole.editor, True),
++    (ProjectRole.reviewer, False), (ProjectRole.viewer, False), (None, False),
++])
++def test_is_staff_by_role(role, staff):
++    with patch.object(ov, "get_project_member", return_value=member(role)):
++        assert ov.is_staff(None, PID, user()) is staff
++
++
++def test_superadmin_is_staff_and_guest_is_not():
++    with patch.object(ov, "get_project_member", return_value=None):
++        assert ov.is_staff(None, PID, user(superadmin=True)) is True
++    assert ov.is_staff(None, PID, None) is False
++
++
++def test_staff_internal_is_kept():
++    with patch.object(ov, "get_project_member", return_value=member(ProjectRole.editor)):
++        assert ov.resolve_visibility(None, PID, user(), "internal") == "internal"
++        assert ov.resolve_visibility(None, PID, user(), "INTERNAL ") == "internal"
++
++
++@pytest.mark.parametrize("role", [ProjectRole.reviewer, ProjectRole.viewer, None])
++def test_non_staff_internal_is_refused_never_downgraded(role):
++    with patch.object(ov, "get_project_member", return_value=member(role)):
++        with pytest.raises(HTTPException) as e:
++            ov.resolve_visibility(None, PID, user(), "internal")
++    assert e.value.status_code == 403
++
++
++def test_guest_internal_is_refused():
++    with pytest.raises(HTTPException) as e:
++        ov.resolve_visibility(None, PID, None, "internal")
++    assert e.value.status_code == 403
++
++
++def test_missing_means_public_and_junk_is_refused():
++    assert ov.resolve_visibility(None, PID, None, None) == "public"
++    assert ov.resolve_visibility(None, PID, None, "public") == "public"
++    with pytest.raises(HTTPException) as e:
++        ov.resolve_visibility(None, PID, None, "secret")
++    assert e.value.status_code == 400
++
++
++def test_reply_under_internal_parent_is_internal_for_staff_and_refused_for_others():
++    parent = SimpleNamespace(visibility="internal")
++    with patch.object(ov, "get_project_member", return_value=member(ProjectRole.owner)):
++        assert ov.resolve_visibility(None, PID, user(), "public", parent) == "internal"
++    with patch.object(ov, "get_project_member", return_value=member(ProjectRole.reviewer)):
++        with pytest.raises(HTTPException):
++            ov.resolve_visibility(None, PID, user(), "public", parent)
++
++
++def test_share_route_schema_now_carries_visibility():
++    # Before the fix pydantic dropped this field on the floor.
++    body = GuestCommentCreate(body="x", visibility="internal")
++    assert body.visibility == "internal"
++    assert GuestCommentCreate(body="x").visibility == "public"
+diff --git a/apps/web/components/review/comment-input.tsx b/apps/web/components/review/comment-input.tsx
+index dcfde4c..44c5108 100644
+--- a/apps/web/components/review/comment-input.tsx
++++ b/apps/web/components/review/comment-input.tsx
+@@ -59,6 +59,8 @@ interface CommentInputProps {
+   annotationActive?: boolean;
+   /** Compare mode: called instead of the global toggle when the pencil / exit is clicked. */
+   onToggleAnnotation?: () => void;
++  /** OSC: share-link views. Everything posted there is client-visible, so no Internal option. */
++  publicOnly?: boolean;
+   className?: string;
+ }
+ 
+@@ -201,6 +203,7 @@ export function CommentInput({
+   disableAnnotations,
+   annotationActive,
+   onToggleAnnotation,
++  publicOnly = false,
+   className,
+ }: CommentInputProps) {
+   const {
+@@ -408,7 +411,7 @@ export function CommentInput({
+         undefined,
+         finalAnnotation,
+         replyToId ?? undefined,
+-        commentVisibility,
++        publicOnly ? "public" : commentVisibility,
+         mentionUserIds.length > 0 ? mentionUserIds : undefined,
+       );
+ 
+@@ -633,7 +636,17 @@ export function CommentInput({
+             </div>
+ 
+             <div className="flex items-center gap-2">
+-              {/* Visibility dropdown */}
++              {/* Visibility: OSC says plainly who will see this before it posts */}
++              {publicOnly ? (
++                <span
++                  data-osc-visibility="public-only"
++                  title="Everything posted on a share link is visible to the client"
++                  className="inline-flex items-center gap-1.5 h-7 px-2.5 rounded-md text-[12px] border border-border text-text-secondary"
++                >
++                  <Globe className="h-3 w-3" />
++                  Visible to client
++                </span>
++              ) : (
+               <div className="relative" ref={visRef}>
+                 <button
+                   onClick={() => setVisDropdownOpen((p) => !p)}
+@@ -649,7 +662,9 @@ export function CommentInput({
+                   ) : (
+                     <Globe className="h-3 w-3" />
+                   )}
+-                  {commentVisibility === "internal" ? "Internal" : "Public"}
++                  <span data-osc-visibility={commentVisibility}>
++                    {commentVisibility === "internal" ? "Internal · OSC only" : "Visible to client"}
++                  </span>
+                   <ChevronDown className="h-3 w-3" />
+                 </button>
+                 {visDropdownOpen && (
+@@ -667,7 +682,7 @@ export function CommentInput({
+                       }}
+                     >
+                       <Globe className="h-3.5 w-3.5" />
+-                      Public
++                      Visible to client
+                     </button>
+                     <button
+                       className={cn(
+@@ -682,11 +697,12 @@ export function CommentInput({
+                       }}
+                     >
+                       <Lock className="h-3.5 w-3.5" />
+-                      Internal
++                      Internal · OSC only
+                     </button>
+                   </div>
+                 )}
+               </div>
++              )}
+ 
+               {/* Submit */}
+               <button
+diff --git a/apps/web/components/share/share-review-screen.tsx b/apps/web/components/share/share-review-screen.tsx
+index d2d0903..23fc02b 100644
+--- a/apps/web/components/share/share-review-screen.tsx
++++ b/apps/web/components/share/share-review-screen.tsx
+@@ -152,7 +152,7 @@ function ShareReviewInner({
+   // Guest identity flow for non-authenticated users
+   const [guestIdentity, setGuestIdentity] = React.useState<{ name: string; email: string } | null>(null)
+   const [showGuestPrompt, setShowGuestPrompt] = React.useState(false)
+-  const pendingCommentRef = React.useRef<{ body: string; timecodeStart?: number; timecodeEnd?: number; annotationData?: Record<string, unknown> } | null>(null)
++  const pendingCommentRef = React.useRef<{ body: string; timecodeStart?: number; timecodeEnd?: number; annotationData?: Record<string, unknown>; parentId?: string } | null>(null)
+   React.useEffect(() => {
+     try {
+       const stored = localStorage.getItem('ff_guest_identity')
+@@ -161,8 +161,11 @@ function ShareReviewInner({
+   }, [])
+   const isLoggedIn = typeof window !== 'undefined' && !!localStorage.getItem('ff_access_token')
+ 
+-  const submitComment = React.useCallback(async (body: string, timecodeStart?: number, timecodeEnd?: number, annotationData?: Record<string, unknown>) => {
++  const submitComment = React.useCallback(async (body: string, timecodeStart?: number, timecodeEnd?: number, annotationData?: Record<string, unknown>, parentId?: string) => {
+     const payload: CreateCommentPayload = { body }
++    // OSC: replies were a no-op on share links (onSubmitReply was `async () => {}`). parent_id now
++    // rides along; the server checks it belongs to this asset. Share links always post public.
++    if (parentId) payload.parent_id = parentId
+     if (currentVersion?.id) payload.version_id = currentVersion.id
+     if (timecodeStart != null) payload.timecode_start = timecodeStart
+     if (timecodeEnd != null) payload.timecode_end = timecodeEnd
+@@ -179,9 +182,9 @@ function ShareReviewInner({
+ 
+     // Auto-submit the pending comment
+     if (pendingCommentRef.current) {
+-      const { body, timecodeStart, timecodeEnd, annotationData } = pendingCommentRef.current
++      const { body, timecodeStart, timecodeEnd, annotationData, parentId } = pendingCommentRef.current
+       pendingCommentRef.current = null
+-      setTimeout(() => submitComment(body, timecodeStart, timecodeEnd, annotationData), 50)
++      setTimeout(() => submitComment(body, timecodeStart, timecodeEnd, annotationData, parentId), 50)
+     }
+   }, [submitComment])
+ 
+@@ -215,7 +218,16 @@ function ShareReviewInner({
+       onAddReaction={() => {}}
+       onRemoveReaction={() => {}}
+       onReply={() => {}}
+-      onSubmitReply={async () => {}}
++      onSubmitReply={canComment ? async (parentId: string, body: string) => {
++        const hasAuth = !!localStorage.getItem('ff_access_token')
++        const hasGuest = !!localStorage.getItem('ff_guest_identity')
++        if (!hasAuth && !hasGuest) {
++          pendingCommentRef.current = { body, parentId }
++          setShowGuestPrompt(true)
++          return
++        }
++        await submitComment(body, undefined, undefined, undefined, parentId)
++      } : undefined}
+     />
+   ) : null
+ 
+@@ -224,6 +236,7 @@ function ShareReviewInner({
+       assetId={asset.id}
+       projectId=""
+       assetType={asset.asset_type}
++      publicOnly
+       onSubmit={async (body: string, timecodeStart?: number, timecodeEnd?: number, annotationData?: Record<string, unknown>) => {
+         const hasAuth = !!localStorage.getItem('ff_access_token')
+         const hasGuest = !!localStorage.getItem('ff_guest_identity')
