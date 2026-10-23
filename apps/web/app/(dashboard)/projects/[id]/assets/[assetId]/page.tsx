@@ -16,6 +16,8 @@ import { CommentPanel } from '@/components/review/comment-panel'
 import { CommentInput } from '@/components/review/comment-input'
 // ApprovalBar removed for now
 import { VersionSwitcher } from '@/components/review/version-switcher'
+import { StatusPill } from '@/components/osc/status'
+import { PosterMenu } from '@/components/osc/poster'
 import { ShareDialog } from '@/components/review/share-dialog'
 import { CompareOverlay } from '@/components/review/compare/compare-overlay'
 import { useReviewStore } from '@/stores/review-store'
@@ -37,9 +39,10 @@ import {
   GitCompareArrows,
 } from 'lucide-react'
 import Link from 'next/link'
-import { cn, formatTimecode } from '@/lib/utils'
+import { cn, versionLabel } from '@/lib/utils'
 import { PoweredByBadge } from '@/components/shared/powered-by-badge'
 import { usePageTitle } from '@/hooks/use-page-title'
+import { useSourceTimecode } from '@/hooks/use-source-timecode'
 import type { Project, AssetResponse, ProjectMember, FolderTreeNode } from '@/types'
 
 const acceptByType: Record<string, string> = {
@@ -55,6 +58,7 @@ function ReviewScreenInner({ projectId }: { projectId: string }) {
   const searchParams = useSearchParams()
   const { asset, versions, isLoading, refetchComments, refetchVersions } = useReview()
   const { currentVersion, isDrawingMode, focusedCommentId, playheadTime, seekTo, setFocusedCommentId, setActiveAnnotation } = useReviewStore()
+  const sourceTimecode = useSourceTimecode() // OSC 0013: the clip's real TC on the mobile sheet
   const { user } = useAuthStore()
   const startVersionUpload = useUploadStore((s) => s.startVersionUpload)
   const versionFileInputRef = useRef<HTMLInputElement>(null)
@@ -465,8 +469,14 @@ function ReviewScreenInner({ projectId }: { projectId: string }) {
     />
   )
 
+  // OSC (Sam 10/3 00:17 "internal by default"): staff = superadmin or project owner/editor.
+  const myRole = members?.find((m) => m.user_id === user?.id)?.role
+  // Until the member list arrives, assume staff (Internal): a slow load must never post public.
+  const isStaff = !!user?.is_superadmin || members === undefined || myRole === 'owner' || myRole === 'editor'
   const commentInputNode = canComment ? (
     <CommentInput
+      defaultVisibility={isStaff ? 'internal' : 'public'}
+      allowInternal={isStaff}
       assetId={asset.id}
       projectId={asset.project_id}
       assetType={asset.asset_type}
@@ -489,7 +499,7 @@ function ReviewScreenInner({ projectId }: { projectId: string }) {
         {currentVersion && (
           <div className="flex items-center justify-between">
             <span className="text-xs text-text-tertiary">Version</span>
-            <span className="text-xs text-text-primary">v{currentVersion.version_number}</span>
+            <span className="text-xs text-text-primary">{versionLabel(currentVersion)}</span>
           </div>
         )}
         {currentVersion && (
@@ -602,6 +612,8 @@ function ReviewScreenInner({ projectId }: { projectId: string }) {
               setTimeout(() => refetchVersions(), 2500)
             }}
           />
+          {asset && <StatusPill asset={asset} />}
+          {asset && asset.asset_type === 'video' && <PosterMenu assetId={asset.id} versionId={currentVersion?.id} />}
           <VersionSwitcher versions={versions} />
           {asset && canCompare(asset.asset_type, versions) && (
             <button
@@ -707,7 +719,7 @@ function ReviewScreenInner({ projectId }: { projectId: string }) {
           // sheet's mini transport rather than leaving a dead play button.
           currentTime={
             asset.asset_type === 'video' || asset.asset_type === 'audio'
-              ? formatTimecode(playheadTime ?? 0)
+              ? sourceTimecode(playheadTime ?? 0)
               : ''
           }
           lockedToCompose={isDrawingMode}

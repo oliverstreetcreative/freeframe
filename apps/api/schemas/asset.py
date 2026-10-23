@@ -1,4 +1,4 @@
-from pydantic import BaseModel
+from pydantic import BaseModel, field_validator
 import uuid
 from datetime import datetime
 from typing import Optional
@@ -33,7 +33,14 @@ class AssetVersionResponse(BaseModel):
     # tell an upload still running on another device from one that stopped.
     last_activity_at: Optional[datetime] = None
     files: list[MediaFileResponse] = []
+    # OSC 0015: our vN from the uploaded file name (slate/filename), shown instead of the upload count.
+    osc_label: Optional[str] = None
     model_config = {"from_attributes": True}
+
+    @field_validator("osc_label", mode="before")
+    @classmethod
+    def _osc_label_str(cls, v):
+        return v if isinstance(v, str) else None
 
 class AssetResponse(BaseModel):
     id: uuid.UUID

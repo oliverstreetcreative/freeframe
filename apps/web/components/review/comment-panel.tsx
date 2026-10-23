@@ -28,7 +28,7 @@ import {
   Lock,
   Download,
 } from "lucide-react";
-import { cn, formatTime, formatRelativeTime } from "@/lib/utils";
+import { cn, formatTime, formatRelativeTime, formatSourceTimecode } from "@/lib/utils";
 import { useReviewStore } from "@/stores/review-store";
 import type { Asset } from "@/types";
 import type { CommentWithReplies } from "@/hooks/use-comments";
@@ -268,6 +268,7 @@ function InlineReplyInput({
 }) {
   const [body, setBody] = React.useState("");
   const [submitting, setSubmitting] = React.useState(false);
+  const [error, setError] = React.useState<string | null>(null);
   const [emojiOpen, setEmojiOpen] = React.useState(false);
   const inputRef = React.useRef<HTMLInputElement>(null);
   const emojiRef = React.useRef<HTMLDivElement>(null);
@@ -292,12 +293,17 @@ function InlineReplyInput({
     const trimmed = body.trim();
     if (!trimmed || submitting) return;
     setSubmitting(true);
+    setError(null);
     try {
       await onSubmit(parentId, trimmed);
       setBody("");
       onCancel();
-    } catch {
-      // error handled upstream
+    } catch (e) {
+      // Keep the typed reply and say why. Nothing upstream reported a failed
+      // reply, so it looked sent. An Error with an empty message is a
+      // deliberate quiet abort (e.g. the guest dismissed the name prompt).
+      const message = e instanceof Error ? e.message : "Couldn't send the reply";
+      setError(message || null);
     } finally {
       setSubmitting(false);
     }
@@ -320,6 +326,11 @@ function InlineReplyInput({
           if (e.key === "Escape") onCancel();
         }}
       />
+      {error && (
+        <p role="alert" className="mt-1.5 text-[12px] text-status-error">
+          {error}
+        </p>
+      )}
       <div className="flex items-center justify-between mt-2">
         <div className="flex items-center gap-1">
           <button className="h-7 w-7 flex items-center justify-center rounded-md text-text-tertiary hover:bg-bg-tertiary hover:text-text-secondary transition-colors">
@@ -416,6 +427,17 @@ function CommentItem({
   const setActiveAnnotation = useReviewStore((s) => s.setActiveAnnotation);
   const showAnnotation = onShowAnnotation ?? setActiveAnnotation;
   const setFocusedCommentId = useReviewStore((s) => s.setFocusedCommentId);
+  // OSC 0013: in timecode mode the chip shows the clip's real source TC (e.g. 00:59:57:13, the
+  // frame Resolve shows), when the start TC loaded is THIS comment's version's. Otherwise (standard
+  // mode, unknown TC, another version's comment) it reads as before. Display only.
+  const timeFormat = useReviewStore((s) => s.timeFormat);
+  const sourceTc = useReviewStore((s) => s.sourceTc);
+  const chipTime = (s: number): string =>
+    timeFormat === "timecode" &&
+    sourceTc?.startFrames != null &&
+    sourceTc.versionId === comment.version_id
+      ? formatSourceTimecode(s, sourceTc.startFrames, sourceTc.fps)
+      : formatTime(s);
   const itemRef = React.useRef<HTMLDivElement>(null);
   const [showReplies, setShowReplies] = React.useState(true);
   const [showEmojiPicker, setShowEmojiPicker] = React.useState(false);
@@ -551,10 +573,10 @@ function CommentItem({
                   title="Jump to timecode"
                 >
                   <Clock className="h-2.5 w-2.5" />
-                  {formatTime(comment.timecode_start)}
+                  {chipTime(comment.timecode_start)}
                   {comment.timecode_end !== null &&
                     comment.timecode_end !== undefined && (
-                      <> — {formatTime(comment.timecode_end)}</>
+                      <> — {chipTime(comment.timecode_end)}</>
                     )}
                 </button>
               )}
@@ -642,7 +664,9 @@ function CommentItem({
 
           {/* Action row: Reply text + hover icons */}
           <div className="mt-1.5 flex items-center gap-2">
-            {depth === 0 && (
+            {/* No submit handler means nowhere to send a reply (a view-only
+                share link), so don't offer one. */}
+            {depth === 0 && onSubmitReply && (
               <button
                 className="text-[13px] font-medium text-text-tertiary hover:text-text-secondary transition-colors"
                 onClick={() => onReply(comment.id)}

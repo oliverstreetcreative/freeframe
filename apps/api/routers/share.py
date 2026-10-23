@@ -1,3 +1,4 @@
+import os as _os  # OSC 0014
 import secrets
 import uuid
 from datetime import datetime, timedelta, timezone
@@ -1284,6 +1285,7 @@ def get_folder_share_assets(
                     duration_seconds=mf.duration_seconds if mf else None,
                     comment_count=comment_count,
                     version_count=(_ready_version_count(db, a.id) if link.show_versions else 1),
+                    latest_version_at=mf.created_at if mf else None,  # OSC 0023
                 ))
         else:
             total = 0
@@ -1301,6 +1303,12 @@ def get_folder_share_assets(
             f = db.query(Folder).filter(Folder.id == folder_id, Folder.deleted_at.is_(None)).first()
             if not f or f.project_id != link.project_id:
                 raise HTTPException(status_code=403, detail="Folder is not within the shared project")
+            # Multi-share: only the shared folders and their descendants, the same rule
+            # validate_asset_in_share applies to assets
+            if is_multi_share:
+                multi_folder_ids = [item.folder_id for item in multi_share_items if item.folder_id]
+                if not any(folder_id == fid or _is_descendant_of(db, folder_id, fid) for fid in multi_folder_ids):
+                    raise HTTPException(status_code=403, detail="Folder is not in the shared items")
         elif folder_id != link.folder_id and not _is_descendant_of(db, folder_id, link.folder_id):
             raise HTTPException(status_code=403, detail="Folder is not within the shared folder")
         target_folder_id = folder_id
@@ -1399,6 +1407,7 @@ def get_folder_share_assets(
             version_count=(_ready_version_count(db, asset.id) if link.show_versions else 1),
             created_by_name=creator.name if creator else None,
             created_at=asset.created_at,
+            latest_version_at=media_file.created_at if media_file else None,  # OSC 0023
         ))
 
     return FolderShareAssetsResponse(
@@ -1454,14 +1463,18 @@ def get_share_stream_url(
 
     if asset.asset_type == AssetType.video and media_file.s3_key_processed:
         if download:
-            # The MP4 rung remuxed from the top rendition, falling back to the
-            # camera master for versions that predate it (see routers/assets.py).
-            s3_key = (
-                media_file.s3_key_download
-                or media_file.s3_key_raw
-                or media_file.s3_key_processed
-            )
-            filename = build_download_filename(asset.name, s3_key, media_file.original_filename)
+            # OSC 0014: a share link is how a client takes DELIVERY, so it hands over the file that
+            # was uploaded (the delivery master), not the web MP4 remuxed from the top HLS rung.
+            # OSC_SHARE_DOWNLOAD=mp4 restores upstream's choice.
+            if _os.environ.get("OSC_SHARE_DOWNLOAD", "original").strip().lower() == "mp4":
+                s3_key = media_file.s3_key_download or media_file.s3_key_raw or media_file.s3_key_processed
+            else:
+                s3_key = media_file.s3_key_raw or media_file.s3_key_download or media_file.s3_key_processed
+            # OSC 0018: the master arrives under its OWN file name (the delivery name the editor gave it,
+            # e.g. torres_..._v14_WEB_..._-16LUFS.mp4), since the item is now named for the deliverable
+            # ("01_Waste") and its review rounds share it. Only when that name and the served bytes agree.
+            stem = _os.path.splitext(media_file.original_filename or "")[0] if s3_key == media_file.s3_key_raw else ""
+            filename = build_download_filename(stem or asset.name, s3_key, media_file.original_filename)
             url = generate_presigned_get_url(s3_key, download_filename=filename)
         else:
             # Route through /stream/hls so S3 can stay private (#51)

@@ -10,7 +10,7 @@ import React, {
   useState,
 } from "react";
 import { api } from "@/lib/api";
-import { useReviewStore } from "@/stores/review-store";
+import { useReviewStore, EMPTY_SOURCE_TC } from "@/stores/review-store";
 import type { AssetResponse, AssetVersion, Comment } from "@/types";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -186,6 +186,7 @@ export function ReviewProvider({
             id: v.id,
             asset_id: assetId,
             version_number: v.version_number,
+            osc_label: v.osc_label ?? null, // OSC 0015
             processing_status: v.processing_status,
             created_by: "",
             created_at: v.created_at,
@@ -303,6 +304,46 @@ export function ReviewProvider({
     };
   }, [shareToken, assetId, currentVersionId, shareSessionParam]);
 
+  // OSC 0013: the current version's embedded start timecode, so the player, tooltips and comment
+  // chips show the clip's real TC (00:59:55:00 at frame 0 on a slated render) instead of counting
+  // from 00:00:00:00. Fails soft: any error leaves it unknown and displays count from 0 as before.
+  const setSourceTc = useReviewStore((s) => s.setSourceTc);
+  useEffect(() => {
+    setSourceTc(EMPTY_SOURCE_TC);
+    if (!currentVersionId) return;
+    let cancelled = false;
+    type SourceTcResponse = { start_tc: string | null; fps: number | null; start_frames: number | null };
+    const load = async (): Promise<SourceTcResponse | null> => {
+      if (shareToken) {
+        const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
+        const headers: Record<string, string> = {};
+        try {
+          const t = localStorage.getItem("ff_access_token");
+          if (t) headers["Authorization"] = `Bearer ${t}`;
+        } catch {}
+        const r = await fetch(
+          `${API_URL}/share/${shareToken}/source-tc?asset_id=${assetId}&version_id=${currentVersionId}${shareSessionParam}`,
+          { headers },
+        );
+        return r.ok ? ((await r.json()) as SourceTcResponse) : null;
+      }
+      return api.get<SourceTcResponse>(`/assets/${assetId}/versions/${currentVersionId}/source-tc`);
+    };
+    load()
+      .then((d) => {
+        if (cancelled || !mountedRef.current || !d) return;
+        setSourceTc({
+          versionId: currentVersionId ?? null,
+          startFrames: typeof d.start_frames === "number" ? d.start_frames : null,
+          fps: typeof d.fps === "number" && d.fps > 0 ? d.fps : null,
+        });
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, [shareToken, assetId, currentVersionId, shareSessionParam, setSourceTc]);
+
   const addComment = useCallback(
     async (payload: CreateCommentPayload): Promise<Comment> => {
       let comment: Comment;
@@ -331,7 +372,17 @@ export function ReviewProvider({
           headers,
           body: JSON.stringify({ ...payload, ...guestFields, asset_id: assetId }),
         });
-        if (!res.ok) throw new Error("Failed to post comment");
+        if (!res.ok) {
+          // Surface the server's reason (e.g. "Parent comment not found on this
+          // asset") so a failed reply can say why. A 422's `detail` is a list,
+          // and a proxy error may have no JSON body: both fall back.
+          let detail = "";
+          try {
+            const data = await res.json();
+            if (typeof data?.detail === "string") detail = data.detail;
+          } catch {}
+          throw new Error(detail || "Failed to post comment");
+        }
         comment = await res.json();
       } else {
         comment = await api.post<Comment>(

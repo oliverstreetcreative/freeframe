@@ -462,6 +462,9 @@ QUALITY_MAP = {
 # What a deployment gets without saying anything. Unchanged behaviour.
 DEFAULT_QUALITIES = ("1080p", "720p", "360p")
 
+# OSC: AAC bitrate for every HLS rung (stereo, 48 kHz). Override with OSC_AUDIO_BITRATE.
+OSC_AUDIO_BITRATE = os.environ.get("OSC_AUDIO_BITRATE", "256k")
+
 
 def rung_height(name: str) -> int:
     """The vertical resolution a rung encodes to (QUALITY_MAP holds `w:h`)."""
@@ -1743,7 +1746,7 @@ class FFmpegTranscoder(BaseTranscoder):
                 if has_audio:
                     cmd += (
                         ["-c:a", "copy"] if audio_codec == "aac"
-                        else ["-c:a", "aac", "-b:a", "192k"]
+                        else ["-c:a", "aac", "-b:a", OSC_AUDIO_BITRATE, "-ac", "2", "-ar", "48000"]
                     )
                 cmd += [
                     "-f", "hls",
@@ -1872,6 +1875,10 @@ class FFmpegTranscoder(BaseTranscoder):
                     ffmpeg_cmd += ["-map", f"[{quality}]"]
                     if has_audio:
                         ffmpeg_cmd += ["-map", "a:0"]
+                        # OSC (Sam 10/3 00:45): explicit review-grade audio. Unset, ffmpeg's
+                        # native AAC fell back to ~128 kb/s; masters are 24-bit 48k stereo.
+                        ffmpeg_cmd += [f"-c:a:{i}", "aac", f"-b:a:{i}", OSC_AUDIO_BITRATE,
+                                       f"-ac:a:{i}", "2", f"-ar:a:{i}", "48000"]
                     if backend == "cpu" or dv_software:
                         enc = "libx265" if family == "hevc" else "libx264"
                         ffmpeg_cmd += [f"-c:v:{i}", enc, "-preset", "fast",
@@ -2086,11 +2093,27 @@ class FFmpegTranscoder(BaseTranscoder):
                     "zscale=t=bt709:m=bt709:r=tv"
                 )
             thumb_vf += ",format=yuvj420p"
-            thumb_cmd = [
-                "ffmpeg", "-y", "-i", input_url,
-                "-vf", thumb_vf, "-q:v", "2", "-frames:v", "1",
-                str(work_dir / "thumb_%04d.jpg"),
-            ]
+            # OSC: a random GOOD frame after the 5 s slate (15%-85% of the program, re-rolled if
+            # black/white/flat/soft) instead of ffmpeg's `thumbnail` pick from the first ~100
+            # frames, which is always the slate on an OSC render. Falls back to upstream's way.
+            poster_t = None
+            try:
+                from .osc_poster import pick_poster_time
+                poster_t = pick_poster_time(input_url, (meta.duration_seconds or None) if meta else None)
+            except Exception:
+                poster_t = None
+            if poster_t is not None:
+                thumb_cmd = [
+                    "ffmpeg", "-y", "-ss", f"{poster_t:.3f}", "-i", input_url,
+                    "-vf", thumb_vf.replace("thumbnail,", "", 1), "-q:v", "2", "-frames:v", "1",
+                    str(work_dir / "thumb_%04d.jpg"),
+                ]
+            else:
+                thumb_cmd = [
+                    "ffmpeg", "-y", "-i", input_url,
+                    "-vf", thumb_vf, "-q:v", "2", "-frames:v", "1",
+                    str(work_dir / "thumb_%04d.jpg"),
+                ]
             self._run(thumb_cmd, label="ffmpeg")
             thumbnail_key = f"{job.output_s3_prefix}/thumbnail.jpg"
             uploaded_thumb = False
@@ -2100,6 +2123,19 @@ class FFmpegTranscoder(BaseTranscoder):
                     ExtraArgs={"ContentType": "image/jpeg", "CacheControl": "max-age=86400"},
                 )
                 uploaded_thumb = True
+
+            # OSC: hover-scrub storyboard (sprite + JSON + WebVTT), keyed by version id. Best-effort:
+            # a failure here never fails the transcode; the grid just doesn't scrub that card.
+            try:
+                from . import osc_sprite
+                osc_sprite.build_and_upload(
+                    self.s3, self.bucket, str(job.version_id), input_url,
+                    (meta.duration_seconds or 0) if meta else 0,
+                    (meta.width or 0) if meta else 0, (meta.height or 0) if meta else 0,
+                    str(work_dir),
+                )
+            except Exception:
+                pass
 
             return TranscodeResult(
                 success=True,

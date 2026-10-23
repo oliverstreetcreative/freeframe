@@ -22,6 +22,8 @@ class AssetStatus(str, PyEnum):
     approved = "approved"
     rejected = "rejected"
     archived = "archived"
+    # OSC status labels: "Client review". DB enum value added by osc_status_ddl.py at API start.
+    client_review = "client_review"
 
 class ProcessingStatus(str, PyEnum):
     uploading = "uploading"
@@ -77,6 +79,31 @@ class AssetVersion(Base):
     created_by: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("users.id"), nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     deleted_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+
+    @property
+    def osc_label(self) -> Optional[str]:
+        """OSC 0015: our vN, read from the uploaded file name (see services/osc_version_label)."""
+        from sqlalchemy.orm import object_session
+        from ..services.osc_version_label import version_label
+        s = object_session(self)
+        if s is None:
+            return None
+        try:  # OSC 0016: a label set when this version was merged in from another item wins
+            from sqlalchemy import text as _text
+            with s.begin_nested():  # a savepoint, so a failure here can't poison the request's txn
+                override = s.execute(_text("SELECT label FROM osc_version_labels WHERE version_id = :v"),
+                                     {"v": str(self.id)}).scalar()
+            if override:
+                return override
+        except Exception:
+            pass
+        try:
+            name = (s.query(MediaFile.original_filename)
+                    .filter(MediaFile.version_id == self.id)
+                    .order_by(MediaFile.created_at.asc()).limit(1).scalar())
+        except Exception:
+            return None
+        return version_label(name)
 
 class FileType(str, PyEnum):
     image = "image"

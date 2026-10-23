@@ -2,7 +2,7 @@
 
 export type AssetType = "image" | "image_carousel" | "audio" | "video";
 
-export type AssetStatus = "draft" | "in_review" | "approved" | "rejected" | "archived";
+export type AssetStatus = "draft" | "in_review" | "approved" | "rejected" | "archived" | "client_review";
 
 export type AssetVersionStatus = "uploading" | "processing" | "ready" | "failed";
 
@@ -139,6 +139,8 @@ export interface AssetVersion {
   /** When the upload last moved; see `mergeHistoryAssets`. */
   last_activity_at?: string | null;
   files?: MediaFile[];
+  /** OSC 0015: our vN from the uploaded file name (slate/filename); shown instead of the upload count. */
+  osc_label?: string | null;
 }
 
 /** Backend returns AssetResponse with latest_version embedded */
@@ -334,6 +336,8 @@ export interface FolderShareAssetItem {
   version_count?: number
   created_by_name: string | null
   created_at: string
+  /** OSC 0023: when the item's latest version went up (what the item shows and sorts by). */
+  latest_version_at?: string | null
 }
 
 export interface FolderShareSubfolder {

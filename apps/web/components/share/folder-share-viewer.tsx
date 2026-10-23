@@ -19,7 +19,7 @@ import {
   PanelRightOpen,
   ArrowLeft,
 } from 'lucide-react'
-import { cn } from '@/lib/utils'
+import { cn, itemTime } from '@/lib/utils'
 import { useShareAppearance } from '@/hooks/use-share-appearance'
 import { withBasePath } from '@/lib/base-path'
 import { useReview, type CreateCommentPayload } from '@/components/review/review-provider'
@@ -27,6 +27,7 @@ import { useReviewStore } from '@/stores/review-store'
 import { fetchDownloadUrl, handleDownload, triggerDownload } from './share-download'
 import { ShareReviewScreen } from './share-review-screen'
 import { useBranding } from '@/components/shared/branding-provider'
+import { ShareKindBadge } from './share-kind-badge' // OSC 0020
 import type {
   SharePermission,
   ShareLinkAppearance,
@@ -338,7 +339,7 @@ function AssetGridCard({ asset, allowDownload, token, shareSession, isSelected, 
           <p className="text-sm font-medium text-text-primary line-clamp-1">{asset.name}</p>
           <p className="text-xs text-text-tertiary mt-0.5 truncate">
             {asset.created_by_name && <>{asset.created_by_name} &middot; </>}
-            {formatShortDate(asset.created_at)}
+            {formatShortDate(itemTime(asset))}
             {asset.file_size != null && <> &middot; {formatFileSize(asset.file_size)}</>}
           </p>
         </div>
@@ -784,7 +785,7 @@ export function FolderShareViewer({
       if (sortBy === 'name') return a.name.localeCompare(b.name)
       if (sortBy === 'file_size') return (b.file_size ?? 0) - (a.file_size ?? 0)
       // default: created_at desc
-      return new Date(b.created_at).getTime() - new Date(a.created_at).getTime()
+      return new Date(itemTime(b)).getTime() - new Date(itemTime(a)).getTime() // OSC 0023: latest version first
     })
     return list
   }, [assets, searchQuery, sortBy])
@@ -926,7 +927,17 @@ export function FolderShareViewer({
         <div className="flex-1 flex flex-col overflow-hidden">
           {/* Sub-header: title, summary, breadcrumb, search */}
           <div className="border-b border-border px-5 py-4">
-            <h1 className="text-lg font-bold text-text-primary leading-tight">{title || folderName}</h1>
+            <div className="flex items-center gap-2 min-w-0">
+              <h1 className="text-lg font-bold text-text-primary leading-tight truncate">{title || folderName}</h1>
+              <ShareKindBadge token={token} shareSession={shareSession} />
+            </div>
+            {/* OSC 0019: the link's description is FOR the client: shown here as plain text
+                (React text, line breaks kept), hidden when empty. */}
+            {description?.trim() && (
+              <p className="mt-1 max-w-prose text-sm text-text-secondary whitespace-pre-line break-words">
+                {description.trim()}
+              </p>
+            )}
             {!loading && (
               <p className="mt-0.5 text-sm text-text-tertiary">
                 {createdByName && <>Created by {createdByName} &middot; </>}
@@ -1083,7 +1094,7 @@ export function FolderShareViewer({
                                     <p className="text-sm font-medium text-text-primary truncate leading-snug">{asset.name}</p>
                                     <p className="text-xs text-text-tertiary mt-0.5 truncate">
                                       {asset.created_by_name && <>{asset.created_by_name} &middot; </>}
-                                      {formatShortDate(asset.created_at)}
+                                      {formatShortDate(itemTime(asset))}
                                     </p>
                                   </div>
                                   {/* File size */}
@@ -1092,7 +1103,7 @@ export function FolderShareViewer({
                                   </span>
                                   {/* Date */}
                                   <span className="hidden sm:block w-28 text-xs text-text-tertiary shrink-0">
-                                    {formatDate(asset.created_at)}
+                                    {formatDate(itemTime(asset))}
                                   </span>
                                   {/* Download */}
                                   {allowDownload && (

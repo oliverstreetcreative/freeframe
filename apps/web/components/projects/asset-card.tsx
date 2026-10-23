@@ -3,10 +3,12 @@
 import * as React from 'react'
 import * as DropdownMenu from '@radix-ui/react-dropdown-menu'
 import { Film, Music, Image as ImageIcon, Images, MessageSquare, MoreHorizontal, Check, Share2, Download, Link as LinkIcon, Pencil, Trash2 } from 'lucide-react'
-import { cn, formatRelativeTime, formatBytes } from '@/lib/utils'
+import { cn, formatRelativeTime, formatBytes, itemTime } from '@/lib/utils'
 import { withBasePath } from '@/lib/base-path'
 import type { Asset, AssetType, User } from '@/types'
 import type { AspectRatio, ThumbnailScale, TitleLines } from '@/stores/view-store'
+import { StatusPill } from '@/components/osc/status'
+import { ScrubOverlay } from '@/components/osc/scrub'
 
 const assetTypeIcons: Record<AssetType, React.ElementType> = {
   video: Film,
@@ -125,6 +127,9 @@ export function AssetCard({
           </div>
         )}
 
+        {/* OSC hover-scrub (under the checkbox/pill/badges, which come after it) */}
+        {asset.asset_type === 'video' && <ScrubOverlay assetId={asset.id} />}
+
         {/* Selection checkbox — top-left */}
         {onSelect && (
           <button
@@ -139,6 +144,9 @@ export function AssetCard({
             <Check className="h-3.5 w-3.5" />
           </button>
         )}
+
+        {/* OSC status label — top-right */}
+        <div className="absolute top-2 right-2"><StatusPill asset={asset} size="xs" /></div>
 
         {/* Duration badge — bottom-right (for video/audio) */}
         {duration != null && duration > 0 && (
@@ -228,7 +236,7 @@ export function AssetCard({
           {/* Author + date + file size row */}
           <p className="text-2xs text-text-tertiary line-clamp-1">
             {showUploader && authorName && <span>{authorName} &bull; </span>}
-            {formatRelativeTime(asset.created_at)}
+            {formatRelativeTime(itemTime(asset))}
             {showFileSize && fileSize ? <span> &bull; {formatBytes(fileSize)}</span> : null}
           </p>
         </div>

@@ -11,20 +11,33 @@
  * (#117, #123).
  */
 import * as React from 'react'
-import { ArrowLeft, Download, Loader2, PanelRightClose, PanelRightOpen } from 'lucide-react'
+import { ShareDecision } from '@/components/osc/share-decision'
+import { ArrowLeft, Download, Loader2, PanelRightClose, PanelRightOpen, X } from 'lucide-react'
 import { useReview, type CreateCommentPayload } from '@/components/review/review-provider'
 import { useReviewStore } from '@/stores/review-store'
 import { MobileCommentSheet, PEEK_PX, type SheetState } from '@/components/review/mobile-comment-sheet'
 import { useMediaQuery } from '@/hooks/use-media-query'
 import { useMediaTransport } from '@/hooks/use-media-transport'
-import { formatTimecode } from '@/lib/utils'
+import { useSourceTimecode } from '@/hooks/use-source-timecode'
 import type { SharePermission } from '@/types'
 import { handleDownload } from './share-download'
+import { ShareKindBadge } from './share-kind-badge' // OSC 0020
+
+/** Signed in, or a guest who has already given a name and email. */
+function hasIdentity(): boolean {
+  try {
+    return !!localStorage.getItem('ff_access_token') || !!localStorage.getItem('ff_guest_identity')
+  } catch {
+    return false
+  }
+}
 
 export function ShareReviewScreen({
-  token, shareSession, assetId, assetName, permission, allowDownload, showVersions, onBack,
+  token, shareSession, assetId, assetName, permission, allowDownload, showVersions, onBack, linkTitle, linkDescription,
 }: {
   token: string; shareSession?: string | null; assetId: string; assetName: string; permission: SharePermission; allowDownload: boolean; showVersions: boolean; onBack?: () => void
+  /** OSC 0019: the link's PUBLIC title and description (single-asset links; the folder grid shows its own). */
+  linkTitle?: string | null; linkDescription?: string | null
 }) {
   const [ReviewProvider, setProvider] = React.useState<any>(null)
   const [VideoPlayer, setVideoPlayer] = React.useState<any>(null)
@@ -71,6 +84,8 @@ export function ShareReviewScreen({
         allowDownload={allowDownload}
         showVersions={showVersions}
         onBack={onBack}
+        linkTitle={linkTitle}
+        linkDescription={linkDescription}
         VideoPlayer={VideoPlayer}
         ImageViewer={ImageViewer}
         AudioPlayer={AudioPlayer}
@@ -83,11 +98,12 @@ export function ShareReviewScreen({
 }
 
 function ShareReviewInner({
-  token, shareSession, assetName, permission, allowDownload, showVersions, onBack,
+  token, shareSession, assetName, permission, allowDownload, showVersions, onBack, linkTitle, linkDescription,
   VideoPlayer, ImageViewer, AudioPlayer, CommentPanel, CommentInput, VersionSwitcher,
 }: any) {
   const { asset, versions, isLoading, comments, refetchComments, addComment } = useReview()
   const { currentVersion, isDrawingMode, focusedCommentId, playheadTime } = useReviewStore()
+  const sourceTimecode = useSourceTimecode() // OSC 0013: the clip's real TC on the mobile sheet
   const [sidebarOpen, setSidebarOpen] = React.useState(() => typeof window !== 'undefined' && window.matchMedia('(min-width: 768px)').matches)
 
   // Same rule as the project review screen: a bottom sheet on a portrait phone
@@ -100,6 +116,12 @@ function ShareReviewInner({
   const { isPlaying, togglePlay } = useMediaTransport()
   const reviewRootRef = React.useRef<HTMLDivElement>(null)
   const handleSheetHeight = React.useCallback((px: number) => setSheetHeight(px), [])
+  // OSC 0019: the link's public title replaces the file name up top; its description is a
+  // dismissible line under the top bar (plain React text, line breaks kept).
+  const publicTitle = (typeof linkTitle === 'string' && linkTitle.trim()) || assetName
+  const descriptionText = typeof linkDescription === 'string' ? linkDescription.trim() : ''
+  const [descriptionDismissed, setDescriptionDismissed] = React.useState(false)
+  const showDescription = !!descriptionText && !descriptionDismissed
 
   // Drawing collapses the sheet to `compose`, which drops the comment list and
   // leaves only the composer and the drawing toolbar. Someone marking up a
@@ -130,7 +152,7 @@ function ShareReviewInner({
     }
     const available = root.clientHeight - sheetHeight - 60
     root.style.setProperty('--ff-stage-max', `${Math.max(80, available)}px`)
-  }, [useSheet, sheetHeight])
+  }, [useSheet, sheetHeight, showDescription]) // OSC 0019: the description line changes the root's height
 
   const [activeTab, setActiveTab] = React.useState<'comments' | 'fields'>('comments')
   const [AnnotationOverlay, setAnnotationOverlay] = React.useState<any>(null)
@@ -152,7 +174,14 @@ function ShareReviewInner({
   // Guest identity flow for non-authenticated users
   const [guestIdentity, setGuestIdentity] = React.useState<{ name: string; email: string } | null>(null)
   const [showGuestPrompt, setShowGuestPrompt] = React.useState(false)
-  const pendingCommentRef = React.useRef<{ body: string; timecodeStart?: number; timecodeEnd?: number; annotationData?: Record<string, unknown> } | null>(null)
+  // What was typed before the guest had a name. A reply also carries its parent
+  // and the promise its InlineReplyInput is waiting on, so the typed text stays
+  // in the box until it is really sent (or the prompt is dismissed).
+  const pendingCommentRef = React.useRef<{
+    body: string; timecodeStart?: number; timecodeEnd?: number; annotationData?: Record<string, unknown>
+    parentId?: string
+    settle?: { resolve: () => void; reject: (e: Error) => void }
+  } | null>(null)
   React.useEffect(() => {
     try {
       const stored = localStorage.getItem('ff_guest_identity')
@@ -161,15 +190,31 @@ function ShareReviewInner({
   }, [])
   const isLoggedIn = typeof window !== 'undefined' && !!localStorage.getItem('ff_access_token')
 
-  const submitComment = React.useCallback(async (body: string, timecodeStart?: number, timecodeEnd?: number, annotationData?: Record<string, unknown>) => {
+  const submitComment = React.useCallback(async (body: string, timecodeStart?: number, timecodeEnd?: number, annotationData?: Record<string, unknown>, parentId?: string) => {
     const payload: CreateCommentPayload = { body }
     if (currentVersion?.id) payload.version_id = currentVersion.id
+    if (parentId) payload.parent_id = parentId
     if (timecodeStart != null) payload.timecode_start = timecodeStart
     if (timecodeEnd != null) payload.timecode_end = timecodeEnd
     if (annotationData) payload.annotation = { drawing_data: annotationData }
     await addComment(payload)
-    refetchComments().catch(() => {})
+    // The optimistic append only ever shows top-level rows (CommentPanel renders
+    // replies from their parent), so a reply is not on screen until the refetch.
+    if (parentId) await refetchComments().catch(() => {})
+    else refetchComments().catch(() => {})
   }, [addComment, currentVersion, refetchComments])
+
+  const submitReply = React.useCallback(async (parentId: string, body: string) => {
+    if (!hasIdentity()) {
+      // Resolved once the guest names themselves and the reply is sent; until
+      // then the reply box keeps what was typed.
+      return new Promise<void>((resolve, reject) => {
+        pendingCommentRef.current = { body, parentId, settle: { resolve, reject } }
+        setShowGuestPrompt(true)
+      })
+    }
+    await submitComment(body, undefined, undefined, undefined, parentId)
+  }, [submitComment])
 
   const handleGuestIdentitySave = React.useCallback(async (name: string, email: string) => {
     const identity = { name, email }
@@ -179,9 +224,13 @@ function ShareReviewInner({
 
     // Auto-submit the pending comment
     if (pendingCommentRef.current) {
-      const { body, timecodeStart, timecodeEnd, annotationData } = pendingCommentRef.current
+      const { body, timecodeStart, timecodeEnd, annotationData, parentId, settle } = pendingCommentRef.current
       pendingCommentRef.current = null
-      setTimeout(() => submitComment(body, timecodeStart, timecodeEnd, annotationData), 50)
+      setTimeout(() => {
+        submitComment(body, timecodeStart, timecodeEnd, annotationData, parentId)
+          .then(() => settle?.resolve())
+          .catch((e) => settle?.reject(e instanceof Error ? e : new Error('Failed to post comment')))
+      }, 50)
     }
   }, [submitComment])
 
@@ -215,7 +264,8 @@ function ShareReviewInner({
       onAddReaction={() => {}}
       onRemoveReaction={() => {}}
       onReply={() => {}}
-      onSubmitReply={async () => {}}
+      // Undefined on a view-only link, which also hides Reply (#439).
+      onSubmitReply={canComment ? submitReply : undefined}
     />
   ) : null
 
@@ -224,10 +274,9 @@ function ShareReviewInner({
       assetId={asset.id}
       projectId=""
       assetType={asset.asset_type}
+      allowInternal={false}
       onSubmit={async (body: string, timecodeStart?: number, timecodeEnd?: number, annotationData?: Record<string, unknown>) => {
-        const hasAuth = !!localStorage.getItem('ff_access_token')
-        const hasGuest = !!localStorage.getItem('ff_guest_identity')
-        if (!hasAuth && !hasGuest) {
+        if (!hasIdentity()) {
           pendingCommentRef.current = { body, timecodeStart, timecodeEnd, annotationData }
           setShowGuestPrompt(true)
           return
@@ -249,12 +298,19 @@ function ShareReviewInner({
               <ArrowLeft className="h-4 w-4" />
             </button>
           )}
-          <span className="text-[13px] font-medium text-text-primary truncate">{assetName}</span>
+          <span className="text-[13px] font-medium text-text-primary truncate" title={publicTitle}>{publicTitle}</span>
+          <ShareKindBadge token={token} shareSession={shareSession} />
+          {publicTitle !== assetName && (
+            <span className="hidden md:inline text-[12px] text-text-tertiary truncate">&middot; {assetName}</span>
+          )}
         </div>
         <div className="flex items-center gap-2">
           {showVersions && VersionSwitcher && versions.length > 0 && (
             <VersionSwitcher versions={versions} />
           )}
+          {/* OSC 0010: client approval from the link (only when the link allows approvals) */}
+          <ShareDecision token={token} shareSession={shareSession} assetId={asset.id}
+            versionId={currentVersion?.id} permission={permission} />
           {allowDownload && (
             <button className="flex items-center gap-1.5 h-7 px-3 rounded-md text-xs font-medium text-text-inverse bg-accent hover:bg-accent-hover transition-colors" onClick={() => handleDownload(token, asset.id, shareSession)}>
               <Download className="h-3 w-3" /> Download
@@ -265,6 +321,23 @@ function ShareReviewInner({
           </button>
         </div>
       </div>
+
+      {/* OSC 0019: the link's description, for the client. */}
+      {showDescription && (
+        <div className="flex items-start gap-2 border-b border-border bg-bg-secondary px-3 py-2 shrink-0">
+          <p className="flex-1 min-w-0 max-h-24 overflow-y-auto text-xs text-text-secondary whitespace-pre-line break-words">
+            {descriptionText}
+          </p>
+          <button
+            onClick={() => setDescriptionDismissed(true)}
+            className="flex items-center justify-center h-5 w-5 rounded text-text-tertiary hover:text-text-primary hover:bg-bg-hover transition-colors shrink-0"
+            title="Hide"
+            aria-label="Hide description"
+          >
+            <X className="h-3 w-3" />
+          </button>
+        </div>
+      )}
 
       {/* Main: viewer + sidebar */}
       {/* pb-14 reserves the sheet's peek band so the player's own transport
@@ -337,7 +410,7 @@ function ShareReviewInner({
           onTogglePlay={togglePlay}
           currentTime={
             asset.asset_type === 'video' || asset.asset_type === 'audio'
-              ? formatTimecode(playheadTime ?? 0)
+              ? sourceTimecode(playheadTime ?? 0)
               : ''
           }
           lockedToCompose={isDrawingMode}
@@ -352,7 +425,12 @@ function ShareReviewInner({
       {showGuestPrompt && (
         <GuestIdentityPrompt
           onSave={handleGuestIdentitySave}
-          onCancel={() => { setShowGuestPrompt(false); pendingCommentRef.current = null }}
+          onCancel={() => {
+            setShowGuestPrompt(false)
+            // A quiet abort: the reply box keeps its text and shows no error.
+            pendingCommentRef.current?.settle?.reject(new Error(''))
+            pendingCommentRef.current = null
+          }}
         />
       )}
     </div>

@@ -14,11 +14,12 @@ import {
   Repeat,
   MoreHorizontal,
 } from "lucide-react";
-import { cn, formatTime, formatTimecode, formatFrames } from "@/lib/utils";
+import { cn, formatTime, formatFrames } from "@/lib/utils";
 import { renderedMediaBox } from "@/lib/media-frame";
 import { api } from "@/lib/api";
 import { useReviewStore, type TimeFormat } from "@/stores/review-store";
 import { useVideoPlayer } from "@/hooks/use-video-player";
+import { useSourceTimecode } from "@/hooks/use-source-timecode"; // OSC 0013
 import { useMediaQuery, MEDIA_SM } from "@/hooks/use-media-query";
 import { useReview } from "./review-provider";
 import { ProgressBar } from "./progress-bar";
@@ -186,6 +187,8 @@ export function VideoPlayer({
     return () => document.removeEventListener("mousedown", handleClick);
   }, [timeFormatOpen]);
 
+  // OSC 0013: timecode mode shows the clip's real source TC (frame 0 = embedded start TC).
+  const sourceTimecode = useSourceTimecode();
   function displayTime(seconds: number): string {
     switch (timeFormat) {
       case "frames":
@@ -193,9 +196,9 @@ export function VideoPlayer({
       case "standard":
         return formatTime(seconds);
       case "timecode":
-        return formatTimecode(seconds);
+        return sourceTimecode(seconds);
       default:
-        return formatTimecode(seconds);
+        return sourceTimecode(seconds);
     }
   }
 
@@ -444,8 +447,9 @@ export function VideoPlayer({
         )}
       </div>
 
-      {/* Progress bar */}
-      <div className="shrink-0 bg-bg-primary">
+      {/* Progress bar. OSC: its own stacking layer above the <video>, which otherwise painted over the
+          hover frame-preview tooltip (the tooltip sits above the bar, over the picture). */}
+      <div className="shrink-0 bg-bg-primary relative z-30">
         <ProgressBar
           currentTime={currentTime}
           duration={duration}
@@ -453,6 +457,7 @@ export function VideoPlayer({
           comments={comments}
           streamUrl={streamUrl}
           onSeek={seek}
+          storyboardAssetId={assetId}
         />
       </div>
 

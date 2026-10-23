@@ -224,3 +224,30 @@ describe('CommentInput iOS auto-zoom guard', () => {
     expect(textarea.className).toContain('[@media(hover:hover)]:text-[13px]')
   })
 })
+
+describe('CommentInput visibility toggle', () => {
+  it('offers Public / Internal by default and submits the chosen visibility', async () => {
+    const onSubmit = vi.fn().mockResolvedValue(undefined)
+    render(<CommentInput assetId="a1" projectId="p1" assetType="video" onSubmit={onSubmit} />)
+
+    // OSC 0002: the toggle says who will see the note ("Visible to client" / "Internal · OSC only").
+    fireEvent.click(screen.getByRole('button', { name: 'Visible to client' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Internal · OSC only' }))
+    await typeAndSubmit('team only')
+
+    expect(onSubmit.mock.calls[0][5]).toBe('internal')
+  })
+
+  it('shows no toggle and always submits public when allowInternal is false', async () => {
+    const onSubmit = vi.fn().mockResolvedValue(undefined)
+    render(
+      <CommentInput assetId="a1" projectId="p1" assetType="video" allowInternal={false} onSubmit={onSubmit} />,
+    )
+
+    expect(screen.queryByRole('button', { name: 'Visible to client' })).toBeNull()
+    expect(screen.queryByRole('button', { name: 'Internal · OSC only' })).toBeNull()
+    await typeAndSubmit('from a share link')
+
+    expect(onSubmit.mock.calls[0][5]).toBe('public')
+  })
+})

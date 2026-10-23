@@ -16,7 +16,7 @@ from ..middleware.share_auth import get_share_link
 from ..services import event_service
 from ..models.asset import Asset, AssetType, AssetVersion, MediaFile, ProcessingStatus
 from ..models.project import ProjectMember, ProjectRole
-from ..models.comment import Annotation, Comment, CommentAttachment, CommentReaction
+from ..models.comment import Annotation, Comment, CommentAttachment, CommentReaction, CommentVisibility
 from ..models.activity import Mention, Notification, NotificationType, ActivityLog, ActivityAction
 from ..models.user import User, GuestUser
 from ..models.share import ShareLink, ShareLinkActivity, ShareActivityAction, SharePermission
@@ -41,6 +41,7 @@ from ..services.permissions import (
 )
 from ..tasks.email_tasks import send_mention_email, send_comment_email
 from ..tasks.celery_app import send_task_safe
+from ..services.osc_visibility import is_staff, resolve_visibility
 
 log = logging.getLogger(__name__)
 
@@ -303,6 +304,9 @@ def _create_mentions(db: Session, comment: Comment, asset: Asset, body: str, aut
     # (or a guest via a share link) could @mention an arbitrary user id/email and have their
     # name, the asset name, and a comment preview emailed to someone with no access to either.
     mentioned_users = [u for u in mentioned_users if can_access_asset(db, asset, u)]
+    # OSC: an internal note's preview is never emailed to a non-staff (client) account.
+    if comment.visibility == "internal":
+        mentioned_users = [u for u in mentioned_users if is_staff(db, asset.project_id, u)]
 
     for user in mentioned_users:
         mention = Mention(comment_id=comment.id, mentioned_user_id=user.id)
@@ -347,8 +351,14 @@ def list_comments(
         query = query.filter(Comment.version_id == version_id)
     if visibility and visibility in ("public", "internal"):
         query = query.filter(Comment.visibility == visibility)
+    # OSC: internal notes are staff-only. Client accounts (reviewer/viewer) never receive them,
+    # nor any reply under them (exclude_internal drops the whole subtree).
+    staff = is_staff(db, asset.project_id, current_user)
+    if not staff:
+        query = query.filter(Comment.visibility != "internal")
     top_level = query.order_by(Comment.created_at).all()
-    return _build_comment_responses_batched(asset_id, top_level, db, current_user_id=current_user.id)
+    return _build_comment_responses_batched(asset_id, top_level, db, current_user_id=current_user.id,
+                                            exclude_internal=not staff)
 
 
 @router.post("/assets/{asset_id}/comments", response_model=CommentResponse, status_code=status.HTTP_201_CREATED)
@@ -374,6 +384,7 @@ def create_comment(
     # inside a thread on an asset the author cannot open. The weaker failure is
     # the same bug pointed at a deleted parent: a 201 for a reply no read path
     # will ever return.
+    parent = None
     if body.parent_id is not None:
         parent = db.query(Comment).filter(
             Comment.id == body.parent_id,
@@ -391,7 +402,8 @@ def create_comment(
         timecode_start=body.timecode_start,
         timecode_end=body.timecode_end,
         body=body.body,
-        visibility=body.visibility or "public",
+        # OSC: enforced server-side (staff only; replies to internal stay internal; never downgraded)
+        visibility=resolve_visibility(db, asset.project_id, current_user, body.visibility, parent),
     )
     db.add(comment)
     db.flush()
@@ -462,7 +474,8 @@ def reply_to_comment(
         body=body.body,
         timecode_start=body.timecode_start,
         timecode_end=body.timecode_end,
-        visibility=body.visibility or "public",
+        # OSC: enforced server-side; a reply to an internal note is internal
+        visibility=resolve_visibility(db, asset.project_id, current_user, body.visibility, parent),
     )
     db.add(reply)
     db.flush()
@@ -739,7 +752,7 @@ def comment_deep_link(
         Comment.asset_id == asset_id,
         Comment.deleted_at.is_(None),
     ).first()
-    if not comment:
+    if not comment or (comment.visibility == "internal" and not is_staff(db, asset.project_id, current_user)):
         raise HTTPException(status_code=404, detail="Comment not found")
 
     url = f"{settings.frontend_url}/assets/{asset_id}?comment={comment_id}"
@@ -777,7 +790,7 @@ def export_comments(
     format: str = Query(...),
     version_id: Optional[uuid.UUID] = Query(default=None),
     fps: Optional[float] = Query(default=None, gt=0),
-    start_tc: str = Query(default="01:00:00:00"),
+    start_tc: Optional[str] = Query(default=None),
     include_resolved: bool = Query(default=True),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
@@ -836,16 +849,34 @@ def export_comments(
                        + ", ".join(str(round(s.fps, 3)) for s in comment_export.FPS_TABLE),
             )
         if format == "edl":
+            # OSC: no ?start_tc= (the web UI never sends one) -> the source's own embedded start
+            # timecode (OSC renders start 00:59:55:00), else upstream's 01:00:00:00.
+            if start_tc is None:
+                from ..services.osc_timecode import probe_start_tc
+                start_tc = probe_start_tc(media_file.s3_key_raw if media_file else None) or "01:00:00:00"
             if not _START_TC_RE.match(start_tc):
                 raise HTTPException(status_code=422, detail="start_tc must be HH:MM:SS:FF")
             hh, mm, ss, ff = (int(p) for p in re.split(r"[:;]", start_tc))
             if not (hh <= 23 and mm < 60 and ss < 60 and ff < spec.timebase):
                 raise HTTPException(status_code=422, detail="start_tc out of range for the frame rate")
 
+    # The asset filter is not redundant: a row filed under another asset with this
+    # version's id (written before guest comments validated version_id) must not
+    # be exported as one of this version's comments.
     comments = db.query(Comment).filter(
+        Comment.asset_id == asset.id,
         Comment.version_id == version.id,
         Comment.deleted_at.is_(None),
     ).order_by(Comment.created_at.asc()).all()
+    # OSC: a client account exporting markers never gets internal notes (or replies under them).
+    if not is_staff(db, asset.project_id, current_user):
+        hidden = {c.id for c in comments if c.visibility == "internal"}
+        changed = True
+        while changed:
+            more = {c.id for c in comments if c.parent_id in hidden and c.id not in hidden}
+            hidden |= more
+            changed = bool(more)
+        comments = [c for c in comments if c.id not in hidden]
 
     user_ids = {c.author_id for c in comments if c.author_id}
     guest_ids = {c.guest_author_id for c in comments if c.guest_author_id}
@@ -946,6 +977,16 @@ def list_share_comments(
     validate_asset_in_share(db, link, asset)
     asset_id = asset.id
 
+    # OSC 0017 (Sam 10/8: a delivery link is "no comments, download only"): a view-only link is a
+    # delivery, so it shows no comments at all, ours or anyone's.
+    if link.permission == SharePermission.view:
+        return []
+    # A link that hides version history serves only the latest ready version, so its comments are that
+    # version's only. Without this, omitting version_id returned every version's public notes.
+    if not getattr(link, "show_versions", True):
+        version_id = None
+        latest_only = True
+
     # The folder/grid preview has no version switcher, so it scopes to the latest ready version.
     if latest_only and not version_id:
         from ..models.asset import AssetVersion, ProcessingStatus
@@ -995,10 +1036,41 @@ def guest_comment(
     asset = _get_asset(db, target_asset_id)
     validate_asset_in_share(db, link, asset)
 
-    # Resolve version_id: use provided or get latest ready version
+    # A reply must answer a comment a guest on this link can actually see: a live,
+    # non-internal comment on the asset the link resolved to (`asset.id`, never
+    # `body.asset_id`). `parent_id` used to be written straight through, so an
+    # unknown id hit the foreign key and answered 500, and a parent on another
+    # asset or behind `internal` was accepted. Mirrors `create_comment` and
+    # `reply_to_comment`, including the version: a reply belongs to the same
+    # version as what it answers.
+    parent = None
+    if body.parent_id:
+        parent = db.query(Comment).filter(
+            Comment.id == body.parent_id,
+            Comment.asset_id == asset.id,
+            Comment.deleted_at.is_(None),
+            Comment.visibility != "internal",
+        ).first()
+        if not parent:
+            raise HTTPException(status_code=400, detail="Parent comment not found on this asset")
+
     version_id = body.version_id
-    if not version_id:
-        from ..models.asset import AssetVersion, ProcessingStatus
+    # A supplied version has to belong to the asset the link resolved, not merely
+    # exist. Without the check the id was written straight through, and the export
+    # selects a version's comments by version_id, so a comment filed here could
+    # surface in another asset's export.
+    if version_id:
+        owned = db.query(AssetVersion).filter(
+            AssetVersion.id == version_id, AssetVersion.asset_id == asset.id,
+            AssetVersion.deleted_at.is_(None),
+        ).first()
+        if not owned:
+            raise HTTPException(status_code=400, detail="version_id does not belong to this asset")
+
+    # Resolve version_id: the parent's for a reply, else provided, else the latest ready version
+    if parent:
+        version_id = parent.version_id
+    elif not version_id:
         latest = db.query(AssetVersion).filter(
             AssetVersion.asset_id == asset.id,
             AssetVersion.deleted_at.is_(None),
@@ -1008,6 +1080,15 @@ def guest_comment(
             version_id = latest.id
         else:
             raise HTTPException(status_code=400, detail="No ready version found for this asset")
+
+    # An internal comment is team-only and the share listing never returns one,
+    # so only a caller with real access to the asset may file it here. The field
+    # used to be dropped, which stored a signed-in member's internal note as
+    # public and showed it to every link holder. Refuse rather than downgrade.
+    if body.visibility == CommentVisibility.internal and not (
+        current_user is not None and can_access_asset(db, asset, current_user)
+    ):
+        raise HTTPException(status_code=403, detail="Internal comments require access to the asset")
 
     # Determine author: logged-in user or guest
     author_id = None
@@ -1028,12 +1109,15 @@ def guest_comment(
     comment = Comment(
         asset_id=asset.id,
         version_id=version_id,
-        parent_id=body.parent_id,
+        parent_id=parent.id if parent else None,
         author_id=author_id,
         guest_author_id=guest_author_id,
         timecode_start=body.timecode_start,
         timecode_end=body.timecode_end,
         body=body.body,
+        # OSC (stricter than upstream #444, which lets any account with access file "internal"):
+        # internal is for staff (owner/editor/superadmin) only, so a client reviewer account gets 403.
+        visibility=resolve_visibility(db, asset.project_id, current_user, body.visibility.value, parent),
     )
     db.add(comment)
     db.flush()
@@ -1043,7 +1127,8 @@ def guest_comment(
     for email in set(emails):
         from ..services.auth_service import get_user_by_email
         user = get_user_by_email(db, email)
-        if user:
+        # Same rule as _create_mentions: only someone who can see the asset is told about it.
+        if user and can_access_asset(db, asset, user):
             mention = Mention(comment_id=comment.id, mentioned_user_id=user.id)
             db.add(mention)
             notif = Notification(

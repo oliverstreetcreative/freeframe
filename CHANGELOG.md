@@ -7,6 +7,42 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- Project navigation and selection action bars wrap on phones so Share, New Folder, Upload and bulk actions remain onscreen.
+
+- Share fields consistently distinguish Name (internal), Title (share-page heading), and Description without changing stored values.
+
+- Share links use compact mobile cards with asset names and previews; detail controls wrap, asset names remain readable, and touch inputs avoid focus zoom.
+
+- Share creation keeps the URL and Copy control available until dismissed; mobile projects now expose All Share Links and copying uses the browser fallback.
+
+### Fixed
+
+- **Replies posted on a share link are saved.** The share review screen handed the comment panel a no-op reply handler, so a reply cleared its box and sent nothing. Folder and project links have had this since v1.0.0, and single-asset links since v1.13.0, when they moved onto the same review screen. Replies now go through the same path as top-level comments, with `parent_id` set, and appear once the thread refetches. A guest without a name yet is asked first, and the typed reply waits in its box instead of being lost. A failed reply keeps its text and says why. On a view-only link, Reply is no longer offered. (#439, #443 by @oliverstreetcreative)
+- **The project page's comment sidebar had the same dead reply box.** It now posts through `useComments().createComment` with the parent. (#439, #443 by @oliverstreetcreative)
+- **`POST /share/{token}/comment` checks a reply's parent.** The parent must be a live, non-internal comment on the asset the link resolves to. Before, an unknown `parent_id` answered 500, and a parent on another asset, a deleted parent, or an internal one was accepted. A share-link reply also now takes its parent's version, as `POST /assets/{id}/comments/{id}/replies` does. (#439, #443 by @oliverstreetcreative)
+
+## [1.15.2] - 2026-10-04
+
+Security release for the public share-link endpoints: [GHSA-wgpf-5p75-cxrm](https://github.com/Techiebutler/freeframe/security/advisories/GHSA-wgpf-5p75-cxrm) and [GHSA-5cmh-v8wr-w32g](https://github.com/Techiebutler/freeframe/security/advisories/GHSA-5cmh-v8wr-w32g). Upgrade if you use share links.
+
+### Upgrade notes
+
+- **No migrations, and no new settings.**
+- **Three share-link requests that used to succeed are now refused.** The web app does not send them in normal use. `POST /share/{token}/comment` answers 400 for a `version_id` that is not a live version of the shared asset, and 403 for `visibility: "internal"` unless the caller is signed in and can access the asset. `GET /share/{token}/assets` on a link created for selected items answers 403 for a `folder_id` outside the shared folders.
+
+### Fixed
+
+- **A share-link comment now stays on the asset the link points at.** `POST /share/{token}/comment` accepted any `version_id` without checking that it belonged to the shared asset, so a comment could be filed against a version of a different asset and show up in that asset's comment export. A supplied `version_id` must now be a live version of the shared asset, or the request gets a 400, the same rule `POST /assets/{id}/comments` already applied. The export also filters on the asset, so a row written before this fix is no longer included. (#444)
+- **An `@mention` in a share-link comment now only notifies people who can see the asset.** The 1.7.4 access check on mentions covered signed-in comments but not the share-link path, which created a mention and an in-app notification for any registered email. Share-link mentions now apply the same check. They still send no email. (#444)
+- **An internal comment posted from a share link now stays internal.** `POST /share/{token}/comment` had no `visibility` field, so a signed-in team member who chose Internal on a share page got a 201 and a comment stored as public, which the share link then showed to everyone holding it. The endpoint now takes `visibility`, stores it, and refuses `internal` with a 403 unless the caller is signed in and can access the asset. Share pages no longer offer the Public / Internal toggle, since the share link never shows an internal comment back. (#444, reported by @oliverstreetcreative)
+- **A share link for selected items now only lists the folders it shares.** `GET /share/{token}/assets` with a `folder_id` checked only that the folder was in the link's project, so a link created for a few items could list the contents of any folder in that project: asset names, thumbnails, sizes, durations, creators and subfolders. The assets themselves could not be opened. The folder must now be one of the shared folders or inside one, or the request gets a 403, the rule the stream endpoint already applied. Folder links and whole-project links are unchanged. (#444)
+
+### Contributors
+
+Thank you to @oliverstreetcreative for the report behind the internal-comment fix, and for #439, whose triage turned up the rest.
+
 ## [1.15.1] - 2026-10-03
 
 ### Upgrade notes

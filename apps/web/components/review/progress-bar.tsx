@@ -1,10 +1,12 @@
 'use client'
 
 import React, { useCallback, useEffect, useRef, useState } from 'react'
+import { useStoryboard, tileStyle, indexAtTime, useSharpTier, dpr } from '@/components/osc/scrub'
 import { createPortal } from 'react-dom'
 import Hls from 'hls.js'
-import { cn, formatTimecode } from '@/lib/utils'
+import { cn } from '@/lib/utils'
 import { useReviewStore } from '@/stores/review-store'
+import { useSourceTimecode } from '@/hooks/use-source-timecode' // OSC 0013
 import type { Comment } from '@/types'
 
 // ─── Avatar helpers ───────────────────────────────────────────────────────────
@@ -39,6 +41,8 @@ interface ProgressBarProps {
   streamUrl?: string | null
   onSeek: (time: number) => void
   className?: string
+  /** OSC: when the asset has a storyboard, previews come from its sprite (no video decoding). */
+  storyboardAssetId?: string
 }
 
 // ─── Frame Preview Hook ───────────────────────────────────────────────────────
@@ -177,6 +181,7 @@ function CommentMarker({
   const setFocusedCommentId = useReviewStore((s) => s.setFocusedCommentId)
   const setActiveAnnotation = useReviewStore((s) => s.setActiveAnnotation)
   const seekTo = useReviewStore((s) => s.seekTo)
+  const sourceTimecode = useSourceTimecode() // OSC 0013: the clip's real TC
   const [tooltipPos, setTooltipPos] = useState<{ left: number; top: number } | null>(null)
 
   // Recalculate tooltip position when hovered to avoid viewport clipping
@@ -249,7 +254,7 @@ function CommentMarker({
               <span className="text-xs font-medium text-white truncate">{authorName}</span>
               {comment.timecode_start !== null && (
                 <span className="ml-auto text-[10px] font-mono text-indigo-400 bg-indigo-500/10 px-1.5 py-0.5 rounded">
-                  {formatTimecode(comment.timecode_start)}
+                  {sourceTimecode(comment.timecode_start)}
                 </span>
               )}
             </div>
@@ -278,14 +283,22 @@ export function ProgressBar({
   streamUrl,
   onSeek,
   className,
+  storyboardAssetId,
 }: ProgressBarProps) {
+  // OSC: sprite previews when a storyboard exists (loaded eagerly, it's one image)
+  const { sb: storyboard } = useStoryboard(storyboardAssetId, true)
+  // the preview box is 160 CSS px wide (w-40): sharp at 160 x devicePixelRatio
+  const seekTier = useSharpTier(storyboard, Math.ceil(160 * dpr()))
   const trackRef = useRef<HTMLDivElement>(null)
   const activePointerIdRef = useRef<number | null>(null)
   const [isDragging, setIsDragging] = useState(false)
+  // OSC (Sam 10/3 00:50): preview on HOVER only. Touch has no hover, so never there.
+  const [pointerKind, setPointerKind] = useState<string>('mouse')
   const [hoverTime, setHoverTime] = useState<number | null>(null)
   const [hoverX, setHoverX] = useState(0)
   const [hoveredCommentId, setHoveredCommentId] = useState<string | null>(null)
   const focusedCommentId = useReviewStore((s) => s.focusedCommentId)
+  const sourceTimecode = useSourceTimecode() // OSC 0013: the clip's real TC in the hover tooltip
 
   const { previewImage, seekPreview, clearPreview } = useFramePreview(streamUrl)
 
@@ -320,6 +333,7 @@ export function ProgressBar({
       // While dragging, only the pointer that started the drag may drive it —
       // otherwise a second finger (e.g. a two-handed grip) would hijack the seek.
       if (isDragging && e.pointerId !== activePointerIdRef.current) return
+      if (e.pointerType !== pointerKind) setPointerKind(e.pointerType)
       const time = getTimeFromEvent(e.clientX)
       setHoverTime(time)
       const track = trackRef.current
@@ -335,9 +349,10 @@ export function ProgressBar({
       if (isDragging) {
         onSeek(time)
       }
-      seekPreview(time)
+      // hover-only preview: no decoder work while dragging or on touch
+      if (!storyboard && !isDragging && e.pointerType !== 'touch') seekPreview(time)
     },
-    [isDragging, getTimeFromEvent, onSeek, seekPreview],
+    [isDragging, getTimeFromEvent, onSeek, seekPreview, storyboard, pointerKind],
   )
 
   const handlePointerLeave = useCallback(() => {
@@ -352,6 +367,7 @@ export function ProgressBar({
       if (!e.isPrimary || e.button !== 0) return // ignore a secondary pointer or a non-primary button (e.g. right-click)
       if (activePointerIdRef.current !== null) return // a drag is already in progress
       activePointerIdRef.current = e.pointerId
+      if (e.pointerType !== pointerKind) setPointerKind(e.pointerType)
       // Pointer capture keeps this element receiving move/up/cancel for this
       // pointer even once it's dragged outside the track's own bounds, so no
       // window-level listeners are needed for drag-outside-track. Optional
@@ -366,7 +382,7 @@ export function ProgressBar({
       setIsDragging(true)
       onSeek(getTimeFromEvent(e.clientX))
     },
-    [getTimeFromEvent, onSeek],
+    [getTimeFromEvent, onSeek, pointerKind],
   )
 
   const handlePointerUp = useCallback(
@@ -503,14 +519,20 @@ export function ProgressBar({
       )}
 
       {/* Frame preview + time tooltip on bar hover */}
-      {hoverTime !== null && (
+      {hoverTime !== null && !isDragging && pointerKind !== 'touch' && (
         <div
           data-testid="progress-bar-hover-tooltip"
           className="absolute -top-2 z-30 pointer-events-none"
           style={{ left: hoverX, transform: 'translateX(-50%) translateY(-100%)' }}
         >
           {/* Frame preview */}
-          {previewImage && (
+          {storyboard ? (
+            <div className="mb-1 rounded-md overflow-hidden border border-white/15 shadow-2xl bg-black w-40"
+                 data-osc-seek-preview="sprite">
+              <div className="w-full" style={{ aspectRatio: `${storyboard.meta.tile_w} / ${storyboard.meta.tile_h}`,
+                ...tileStyle(storyboard, indexAtTime(storyboard, hoverTime), seekTier) }} />
+            </div>
+          ) : previewImage && (
             <div className="mb-1 rounded-md overflow-hidden border border-white/15 shadow-2xl">
               {/* eslint-disable-next-line @next/next/no-img-element */}
               <img src={previewImage} alt="" className="w-40 object-contain bg-black" />
@@ -519,7 +541,7 @@ export function ProgressBar({
           {/* Time label */}
           <div className="flex justify-center">
             <span className="bg-black/90 text-white text-[11px] font-mono px-2 py-0.5 rounded-md">
-              {formatTimecode(hoverTime)}
+              {sourceTimecode(hoverTime)}
             </span>
           </div>
         </div>

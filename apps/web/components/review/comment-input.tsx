@@ -23,6 +23,7 @@ import { cn, formatTime, formatTimecode, formatFrames } from "@/lib/utils";
 import { useReviewStore } from "@/stores/review-store";
 import { useReview } from "./review-provider";
 import { useDrawing } from "@/hooks/use-drawing";
+import { useSourceTimecode } from "@/hooks/use-source-timecode"; // OSC 0013
 import { api } from "@/lib/api";
 import { resolveSubmitTimecode } from "@/lib/resolve-submit-timecode";
 import type { User } from "@/types";
@@ -59,6 +60,14 @@ interface CommentInputProps {
   annotationActive?: boolean;
   /** Compare mode: called instead of the global toggle when the pencil / exit is clicked. */
   onToggleAnnotation?: () => void;
+  /**
+   * Show the Public / Internal toggle. Share pages pass false: an internal
+   * comment is team-only, so the share link would never show it back, and the
+   * API refuses one from a caller without access to the asset.
+   */
+  /** OSC (Sam 10/3 00:17): staff comments start as Internal. Undefined = public. */
+  defaultVisibility?: "public" | "internal";
+  allowInternal?: boolean;
   className?: string;
 }
 
@@ -201,6 +210,8 @@ export function CommentInput({
   disableAnnotations,
   annotationActive,
   onToggleAnnotation,
+  defaultVisibility,
+  allowInternal = true,
   className,
 }: CommentInputProps) {
   const {
@@ -238,7 +249,15 @@ export function CommentInput({
   const [error, setError] = React.useState<string | null>(null);
   const [commentVisibility, setCommentVisibility] = React.useState<
     "public" | "internal"
-  >("public");
+  >(defaultVisibility ?? "public");
+  // The staff/role check can resolve after mount: follow the default until the user picks.
+  const visTouchedRef = React.useRef(false);
+  React.useEffect(() => {
+    if (!visTouchedRef.current && defaultVisibility) setCommentVisibility(defaultVisibility);
+  }, [defaultVisibility]);
+  React.useEffect(() => {
+    if (!allowInternal) setCommentVisibility("public");
+  }, [allowInternal]);
   const [visDropdownOpen, setVisDropdownOpen] = React.useState(false);
   const [timecodeAttached, setTimecodeAttached] = React.useState(true);
   const visRef = React.useRef<HTMLDivElement>(null);
@@ -276,6 +295,12 @@ export function CommentInput({
   const canAnnotate = assetType !== "audio" && !disableAnnotations;
   const hasTimecode = assetType === "video" || assetType === "audio";
 
+  // OSC 0013: the attached-timecode chip shows the clip's real source TC. A compare pane
+  // (playheadTimeOverride set) may be showing a version other than the current one, whose start
+  // TC isn't loaded, so it keeps counting from 0. The stored timecode_start stays seconds-from-0.
+  const sourceTimecode = useSourceTimecode();
+  const tcLabel = (s: number) =>
+    playheadTimeOverride != null ? formatTimecode(s) : sourceTimecode(s);
   function displayTime(seconds: number): string {
     switch (timeFormat) {
       case "frames":
@@ -283,9 +308,9 @@ export function CommentInput({
       case "standard":
         return formatTime(seconds);
       case "timecode":
-        return formatTimecode(seconds);
+        return tcLabel(seconds);
       default:
-        return formatTimecode(seconds);
+        return tcLabel(seconds);
     }
   }
   const hasAnnotation =
@@ -408,7 +433,7 @@ export function CommentInput({
         undefined,
         finalAnnotation,
         replyToId ?? undefined,
-        commentVisibility,
+        allowInternal ? commentVisibility : "public",
         mentionUserIds.length > 0 ? mentionUserIds : undefined,
       );
 
@@ -633,7 +658,17 @@ export function CommentInput({
             </div>
 
             <div className="flex items-center gap-2">
-              {/* Visibility dropdown */}
+              {/* Visibility: OSC says plainly who will see this before it posts */}
+              {!allowInternal ? (
+                <span
+                  data-osc-visibility="public-only"
+                  title="Everything posted on a share link is visible to the client"
+                  className="inline-flex items-center gap-1.5 h-7 px-2.5 rounded-md text-[12px] border border-border text-text-secondary"
+                >
+                  <Globe className="h-3 w-3" />
+                  Visible to client
+                </span>
+              ) : (
               <div className="relative" ref={visRef}>
                 <button
                   onClick={() => setVisDropdownOpen((p) => !p)}
@@ -649,7 +684,9 @@ export function CommentInput({
                   ) : (
                     <Globe className="h-3 w-3" />
                   )}
-                  {commentVisibility === "internal" ? "Internal" : "Public"}
+                  <span data-osc-visibility={commentVisibility}>
+                    {commentVisibility === "internal" ? "Internal · OSC only" : "Visible to client"}
+                  </span>
                   <ChevronDown className="h-3 w-3" />
                 </button>
                 {visDropdownOpen && (
@@ -662,12 +699,13 @@ export function CommentInput({
                           : "text-text-secondary hover:bg-bg-tertiary",
                       )}
                       onClick={() => {
+                        visTouchedRef.current = true;
                         setCommentVisibility("public");
                         setVisDropdownOpen(false);
                       }}
                     >
                       <Globe className="h-3.5 w-3.5" />
-                      Public
+                      Visible to client
                     </button>
                     <button
                       className={cn(
@@ -677,16 +715,18 @@ export function CommentInput({
                           : "text-text-secondary hover:bg-bg-tertiary",
                       )}
                       onClick={() => {
+                        visTouchedRef.current = true;
                         setCommentVisibility("internal");
                         setVisDropdownOpen(false);
                       }}
                     >
                       <Lock className="h-3.5 w-3.5" />
-                      Internal
+                      Internal · OSC only
                     </button>
                   </div>
                 )}
               </div>
+              )}
 
               {/* Submit */}
               <button

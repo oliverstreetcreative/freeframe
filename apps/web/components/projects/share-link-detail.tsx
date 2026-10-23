@@ -24,10 +24,22 @@ import {
   Globe,
   X,
 } from "lucide-react";
-import { cn } from "@/lib/utils";
+import { cn, copyToClipboard } from "@/lib/utils";
 import { withBasePath } from "@/lib/base-path";
 import { api } from "@/lib/api";
 import { ShareLinkActivityPanel } from "@/components/projects/share-link-activity";
+import {
+  KindToggle,
+  SlateGuardNotice,
+} from "@/components/projects/share-kind-controls";
+import {
+  KIND_HINT,
+  inferKind,
+  putShareMeta,
+  useShareMeta,
+  type ShareKind,
+  type ShareMetaPutBody,
+} from "@/hooks/use-share-meta";
 import type { ShareLink, ShareLinkAppearance } from "@/types";
 
 // ─── Shared hook for share link data + mutations ────────────────────────────
@@ -466,15 +478,13 @@ function ShareUserSearch({ shareLink }: { shareLink: ShareLink }) {
 
 function CopyButton({ text, className }: { text: string; className?: string }) {
   const [copied, setCopied] = React.useState(false);
+  const [copyFailed, setCopyFailed] = React.useState(false);
 
   async function handleCopy() {
-    try {
-      await navigator.clipboard.writeText(text);
-      setCopied(true);
-      setTimeout(() => setCopied(false), 2000);
-    } catch {
-      // Fallback
-    }
+    const ok = await copyToClipboard(text);
+    setCopyFailed(!ok);
+    setCopied(ok);
+    if (ok) setTimeout(() => setCopied(false), 2000);
   }
 
   return (
@@ -484,7 +494,7 @@ function CopyButton({ text, className }: { text: string; className?: string }) {
         "inline-flex items-center gap-1.5 rounded px-2 py-1 text-xs text-text-secondary hover:bg-bg-hover hover:text-text-primary transition-colors",
         className,
       )}
-      title="Copy to clipboard"
+      title={copyFailed ? "Copy failed. Select the URL and copy manually." : "Copy to clipboard"}
     >
       {copied ? (
         <>
@@ -494,7 +504,7 @@ function CopyButton({ text, className }: { text: string; className?: string }) {
       ) : (
         <>
           <Copy className="h-3.5 w-3.5" />
-          <span>Copy</span>
+          <span>{copyFailed ? "Copy failed — select URL" : "Copy"}</span>
         </>
       )}
     </button>
@@ -505,15 +515,13 @@ function CopyButton({ text, className }: { text: string; className?: string }) {
 
 function CopyLinkButton({ text }: { text: string }) {
   const [copied, setCopied] = React.useState(false);
+  const [copyFailed, setCopyFailed] = React.useState(false);
 
   async function handleCopy() {
-    try {
-      await navigator.clipboard.writeText(text);
-      setCopied(true);
-      setTimeout(() => setCopied(false), 2000);
-    } catch {
-      // Fallback
-    }
+    const ok = await copyToClipboard(text);
+    setCopyFailed(!ok);
+    setCopied(ok);
+    if (ok) setTimeout(() => setCopied(false), 2000);
   }
 
   return (
@@ -534,7 +542,7 @@ function CopyLinkButton({ text }: { text: string }) {
       ) : (
         <>
           <Copy className="h-4 w-4" />
-          Copy Link
+          {copyFailed ? "Copy failed — select URL" : "Copy Link"}
         </>
       )}
     </button>
@@ -564,10 +572,52 @@ export function ShareLinkContent({
   frontendUrl,
   onUpdate,
 }: ShareLinkContentProps) {
-  const { shareLink, immediateUpdate } = useShareLinkData(token);
+  const { shareLink, immediateUpdate, mutate } = useShareLinkData(token);
 
   const [localTitle, setLocalTitle] = React.useState("");
   const [localDescription, setLocalDescription] = React.useState("");
+
+  // OSC 0019: the link's KIND (review / delivery) and its staff-only INTERNAL LABEL.
+  const { shareMeta, mutateShareMeta } = useShareMeta(projectId);
+  const meta = shareLink ? shareMeta[shareLink.id] : undefined;
+  const currentKind: ShareKind =
+    meta?.kind ?? (shareLink ? inferKind(shareLink) : "review");
+  const [localLabel, setLocalLabel] = React.useState("");
+  const [metaBusy, setMetaBusy] = React.useState(false);
+  const [metaError, setMetaError] = React.useState<string | null>(null);
+  const [slateBlock, setSlateBlock] = React.useState<{
+    detail: string;
+    slated: string[];
+  } | null>(null);
+
+  React.useEffect(() => {
+    setLocalLabel(meta?.internal_label ?? "");
+  }, [meta?.internal_label]);
+
+  const saveMeta = React.useCallback(
+    async (body: ShareMetaPutBody) => {
+      if (!shareLink) return;
+      setMetaBusy(true);
+      setMetaError(null);
+      try {
+        const out = await putShareMeta(shareLink.id, body);
+        if (out.ok) {
+          setSlateBlock(null);
+          // The preset moved permission / download / versions: refresh the
+          // settings panel (same SWR key) and the link list too.
+          await Promise.all([mutateShareMeta(), mutate()]);
+          onUpdate?.();
+        } else if (out.status === 409) {
+          setSlateBlock({ detail: out.detail, slated: out.slated });
+        } else {
+          setMetaError(out.detail);
+        }
+      } finally {
+        setMetaBusy(false);
+      }
+    },
+    [shareLink, mutateShareMeta, mutate, onUpdate],
+  );
   const [previewThumbnails, setPreviewThumbnails] = React.useState<
     {
       id: string;
@@ -576,6 +626,7 @@ export function ShareLinkContent({
       asset_type: string;
     }[]
   >([]);
+  const [previewAssetCount, setPreviewAssetCount] = React.useState(0);
   const [previewFolders, setPreviewFolders] = React.useState<
     { id: string; name: string; item_count: number }[]
   >([]);
@@ -602,7 +653,7 @@ export function ShareLinkContent({
           asset_type: string;
           thumbnail_url: string | null;
         }>(`/assets/${shareLink.asset_id}`)
-        .then((asset) => setPreviewThumbnails([asset]))
+        .then((asset) => { setPreviewThumbnails([asset]); setPreviewAssetCount(1); })
         .catch(() => setPreviewThumbnails([]));
       setPreviewFolders([]);
     } else if (folderId || isProjectShare) {
@@ -617,8 +668,9 @@ export function ShareLinkContent({
       fetch(`${API_URL}/share/${token}/assets?page=1&per_page=50`, { headers })
         .then((r) => r.ok ? r.json() : Promise.reject())
         .then((data) => {
+          setPreviewAssetCount(data.total ?? data.assets?.length ?? 0);
           setPreviewThumbnails(
-            (data.assets || []).slice(0, 4).map((a: any) => ({
+            (data.assets || []).map((a: any) => ({
               id: a.id,
               name: a.name,
               asset_type: a.asset_type,
@@ -655,7 +707,7 @@ export function ShareLinkContent({
 
   return (
     <div className="flex-1 flex flex-col min-w-0 overflow-y-auto">
-      <div className="p-6 space-y-6">
+      <div className="min-w-0 p-3 sm:p-6 space-y-6">
         {/* Back button */}
         <button
           onClick={onBack}
@@ -665,33 +717,92 @@ export function ShareLinkContent({
           All Share Links
         </button>
 
-        {/* Editable title */}
-        <input
-          type="text"
-          value={localTitle}
-          onChange={(e) => setLocalTitle(e.target.value)}
-          onBlur={() => {
-            if (localTitle !== shareLink.title) {
-              immediateUpdate({ title: localTitle }).then(() => onUpdate?.());
-            }
-          }}
-          placeholder="Untitled Share Link"
-          className="w-full bg-transparent text-2xl font-semibold text-text-primary placeholder:text-text-tertiary outline-none border-none focus:ring-0"
-        />
+        {/* OSC 0019: kind + internal label (staff only) */}
+        <div className="rounded-lg border border-border bg-bg-tertiary/40 p-4 space-y-3">
+          <div className="flex flex-col items-start sm:flex-row sm:items-center justify-between gap-3">
+            <div className="min-w-0">
+              <p className="text-sm text-text-primary">Kind</p>
+              <p className="text-xs text-text-tertiary mt-0.5">
+                {KIND_HINT[currentKind]}
+              </p>
+            </div>
+            <KindToggle
+              value={currentKind}
+              disabled={metaBusy}
+              onChange={(kind) => saveMeta({ kind })}
+            />
+          </div>
+          {slateBlock && (
+            <SlateGuardNotice
+              detail={slateBlock.detail}
+              slated={slateBlock.slated}
+              busy={metaBusy}
+              onForce={() => saveMeta({ kind: "delivery", force: true })}
+              onCancel={() => setSlateBlock(null)}
+            />
+          )}
+          {metaError && (
+            <p className="text-xs text-status-error">{metaError}</p>
+          )}
+          <div className="space-y-1.5">
+            <label className="text-xs font-medium text-text-secondary">
+              Name (internal)
+            </label>
+            <input
+              type="text"
+              aria-label="Name"
+              value={localLabel}
+              maxLength={255}
+              onChange={(e) => setLocalLabel(e.target.value)}
+              onBlur={() => {
+                if (localLabel.trim() !== (meta?.internal_label ?? "")) {
+                  saveMeta({ internal_label: localLabel.trim() || null });
+                }
+              }}
+              placeholder="e.g. Brand film v3, for Jo's notes"
+              className="w-full rounded-md border border-border bg-bg-tertiary px-3 py-2 text-[16px] sm:text-sm text-text-primary placeholder:text-text-tertiary outline-none focus:border-accent/50"
+            />
+          </div>
+        </div>
 
-        {/* Editable description */}
-        <textarea
-          value={localDescription}
-          onChange={(e) => setLocalDescription(e.target.value)}
-          onBlur={() => {
-            if (localDescription !== (shareLink.description || "")) {
-              immediateUpdate({ description: localDescription || null });
-            }
-          }}
-          placeholder="Add a description..."
-          rows={2}
-          className="w-full bg-transparent text-sm text-text-secondary placeholder:text-text-tertiary outline-none border-none resize-none focus:ring-0"
-        />
+        {/* Editable title (OSC 0019: this is the PUBLIC title) */}
+        <div className="space-y-1">
+          <label className="text-xs font-medium text-text-secondary">
+            Title (share-page heading)
+          </label>
+          <textarea rows={3}
+            aria-label="Title"
+            value={localTitle}
+            onChange={(e) => setLocalTitle(e.target.value)}
+            onBlur={() => {
+              if (localTitle !== shareLink.title) {
+                immediateUpdate({ title: localTitle }).then(() => onUpdate?.());
+              }
+            }}
+            placeholder="Untitled Share Link"
+            className="w-full bg-transparent text-xl sm:text-2xl resize-none font-semibold text-text-primary placeholder:text-text-tertiary outline-none border-none focus:ring-0"
+          />
+        </div>
+
+        {/* Editable description (OSC 0019: shown to the client on the share page) */}
+        <div className="space-y-1">
+          <label className="text-xs font-medium text-text-secondary">
+            Description
+          </label>
+          <textarea
+            aria-label="Description"
+            value={localDescription}
+            onChange={(e) => setLocalDescription(e.target.value)}
+            onBlur={() => {
+              if (localDescription !== (shareLink.description || "")) {
+                immediateUpdate({ description: localDescription || null });
+              }
+            }}
+            placeholder="Add a description..."
+            rows={2}
+            className="w-full bg-transparent text-[16px] sm:text-sm text-text-secondary placeholder:text-text-tertiary outline-none border-none resize-none focus:ring-0"
+          />
+        </div>
 
         {/* Content preview — matches project view style */}
         {previewFolders.length > 0 || previewThumbnails.length > 0 ? (
@@ -703,7 +814,7 @@ export function ShareLinkContent({
                   {previewFolders.length}{" "}
                   {previewFolders.length === 1 ? "Folder" : "Folders"}
                 </span>
-                <div className="grid grid-cols-3 gap-3">
+                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
                   {previewFolders.map((folder) => (
                     <div
                       key={folder.id}
@@ -726,7 +837,7 @@ export function ShareLinkContent({
                         </svg>
                       </div>
                       <div className="px-3 py-2">
-                        <p className="text-sm font-medium text-text-primary truncate">
+                        <p className="text-sm font-medium text-text-primary break-words [overflow-wrap:anywhere]">
                           {folder.name}
                         </p>
                         <p className="text-xs text-text-tertiary mt-0.5">
@@ -743,11 +854,12 @@ export function ShareLinkContent({
             {previewThumbnails.length > 0 && (
               <>
                 <span className="text-xs text-text-tertiary font-medium uppercase tracking-wider">
-                  {previewThumbnails.length}{" "}
-                  {previewThumbnails.length === 1 ? "Asset" : "Assets"}
+                  {previewAssetCount}{" "}
+                  {previewAssetCount === 1 ? "Asset" : "Assets"}
                 </span>
-                <div className="grid grid-cols-3 gap-3">
-                  {previewThumbnails.slice(0, 6).map((asset) => (
+                {previewAssetCount > previewThumbnails.length && <p className="text-xs text-text-tertiary">Showing {previewThumbnails.length} of {previewAssetCount} assets</p>}
+                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+                  {previewThumbnails.map((asset) => (
                     <div
                       key={asset.id}
                       className="rounded-lg border border-border bg-bg-tertiary/50 overflow-hidden"
@@ -765,7 +877,7 @@ export function ShareLinkContent({
                         )}
                       </div>
                       <div className="px-3 py-2">
-                        <p className="text-sm font-medium text-text-primary truncate">
+                        <p className="text-sm font-medium text-text-primary break-words [overflow-wrap:anywhere]">
                           {asset.name}
                         </p>
                       </div>
@@ -787,7 +899,7 @@ export function ShareLinkContent({
         )}
 
         {/* Action buttons */}
-        <div className="flex items-center gap-3">
+        <div className="flex flex-wrap items-center gap-3">
           <button
             onClick={() => window.open(shareUrl, "_blank")}
             className="inline-flex items-center gap-2 rounded-lg bg-accent px-4 py-2 text-sm font-medium text-text-inverse hover:bg-accent/90 transition-colors"
@@ -888,9 +1000,7 @@ export function ShareLinkSettingsPanel({ token }: ShareLinkSettingsPanelProps) {
               />
               {/* URL + Visibility dropdown */}
               <div className="flex items-center gap-2 rounded-md bg-bg-tertiary px-3 py-2 mt-2">
-                <span className="flex-1 truncate font-mono text-xs text-text-secondary">
-                  {shareUrl}
-                </span>
+                <input aria-label="Share URL" readOnly value={shareUrl} onFocus={(e) => e.currentTarget.select()} className="flex-1 min-w-0 bg-transparent font-mono text-xs text-text-secondary" />
                 <CopyButton text={shareUrl} />
                 <select
                   value={shareLink.visibility || "public"}

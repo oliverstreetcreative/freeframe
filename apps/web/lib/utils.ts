@@ -42,6 +42,38 @@ export function formatTimecode(seconds: number, fps = 24): string {
 }
 
 /**
+ * OSC 0013: timecode as the SOURCE FILE counts it — frame 0 is the file's embedded start TC
+ * (e.g. 00:59:55:00 for a render with a 5 s slate pre-roll), not 00:00:00:00.
+ * `startFrames` is that start TC as an absolute frame count in the nominal base (from the API);
+ * null means unknown, which falls back to today's count-from-zero display.
+ * Drop-frame sources (29.97/59.94 with ';') are labelled with NON-drop arithmetic here, so a long
+ * DF clip can drift a few frames from its true label — acceptable for review notes; exports use
+ * the server's exact math.
+ */
+export function formatSourceTimecode(
+  seconds: number,
+  startFrames: number | null | undefined,
+  fps: number | null | undefined,
+): string {
+  const real = fps && fps > 0 ? fps : 24
+  const base = Math.max(1, Math.round(real))
+  if (startFrames == null) return formatTimecode(seconds, base)
+  // Rounded, like the EDL export (comment_export: round(seconds * fps)), so a note reads the same
+  // frame in Review and as a Resolve marker. Measured 10/3: a 20.0 s comment on a 23.976 render is
+  // source frame 480 (SSIM), which floor() labelled one frame early.
+  const frameIndex = Math.round(Math.max(0, seconds) * real)
+  const total = startFrames + frameIndex
+  const ff = total % base
+  const totalSeconds = Math.floor(total / base)
+  return [
+    String(Math.floor(totalSeconds / 3600) % 24).padStart(2, '0'),
+    String(Math.floor(totalSeconds / 60) % 60).padStart(2, '0'),
+    String(totalSeconds % 60).padStart(2, '0'),
+    String(ff).padStart(2, '0'),
+  ].join(':')
+}
+
+/**
  * Format seconds as frame count at given fps
  * e.g. 83.5 at 24fps → "2004"
  */
@@ -208,4 +240,27 @@ export function uploadNameForFile(
 ): string {
   if (fileCount === 1) return typedName.trim() || assetNameFromFile(fileName)
   return assetNameFromFile(fileName)
+}
+
+/**
+ * OSC 0015: the version label a person sees. OSC numbers versions by review round, and the render's
+ * file name + slate carry that number, so the API sends it as `osc_label` ("v10"). Falls back to the
+ * upload count when the file carries no vN. Sam 10/5: "Sam must never translate."
+ */
+export function versionLabel(v: { version_number: number; osc_label?: string | null } | null | undefined): string {
+  if (!v) return ''
+  return v.osc_label || `v${v.version_number}`
+}
+
+/**
+ * OSC 0023 (Sam 10/8 22:50): the time an item shows and sorts by is when its LATEST version went up,
+ * not the first upload of the stack (a stack updated tonight read "Oct 4"). Falls back to the item's
+ * own created_at when no version time is known.
+ */
+export function itemTime(a: {
+  created_at: string
+  latest_version?: { created_at?: string | null } | null
+  latest_version_at?: string | null
+}): string {
+  return a.latest_version?.created_at || a.latest_version_at || a.created_at
 }

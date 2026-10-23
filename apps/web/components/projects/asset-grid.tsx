@@ -3,12 +3,13 @@
 import * as React from 'react'
 import * as DropdownMenu from '@radix-ui/react-dropdown-menu'
 import { X, Download, MoreHorizontal, Layers, Share2, Trash2, FolderInput, FolderIcon, Check, Film, Music, Image as ImageIcon, Images, Link as LinkIcon, Pencil } from 'lucide-react'
-import { cn, formatRelativeTime, formatBytes } from '@/lib/utils'
+import { cn, formatRelativeTime, formatBytes, itemTime } from '@/lib/utils'
 import { withBasePath } from '@/lib/base-path'
 import { Button } from '@/components/ui/button'
 import { Avatar } from '@/components/shared/avatar'
 import { EmptyState } from '@/components/shared/empty-state'
 import { AssetCard } from './asset-card'
+import { OSC_STATUS_ORDER, StatusPill, StatusFilterBar, effectiveStatus, passesStatusFilter, useOscStatusVersion } from '@/components/osc/status'
 import { FolderCard } from './folder-card'
 import { AppearancePopover } from './appearance-popover'
 import { SortPopover } from './sort-popover'
@@ -27,13 +28,8 @@ const assetTypeIcons: Record<string, React.ElementType> = {
   image_carousel: Images,
 }
 
-const statusOrder: Record<AssetStatus, number> = {
-  in_review: 0,
-  draft: 1,
-  approved: 2,
-  rejected: 3,
-  archived: 4,
-}
+// OSC status labels: order + effective status come from components/osc/status.tsx
+const statusOrder: Record<AssetStatus, number> = OSC_STATUS_ORDER
 
 interface AssetGridProps {
   assets: Asset[]
@@ -42,6 +38,8 @@ interface AssetGridProps {
   assignees?: Record<string, User>
   thumbnails?: Record<string, string>
   versionCounts?: Record<string, number>
+  /** OSC 0015: our vN per asset (from the file name); falls back to the count. */
+  versionLabels?: Record<string, string>
   authorNames?: Record<string, string>
   fileSizes?: Record<string, number>
   selectedAssetId?: string | null
@@ -100,6 +98,7 @@ export function AssetGrid({
   assignees = {},
   thumbnails = {},
   versionCounts = {},
+  versionLabels = {},
   authorNames = {},
   fileSizes = {},
   selectedAssetId,
@@ -184,18 +183,20 @@ export function AssetGrid({
   const totalSelected = selectedAssetIds.size + selectedFolderIds.size
   const selectedTotalSize = Array.from(selectedAssetIds).reduce((sum, id) => sum + (fileSizes[id] ?? 0), 0)
 
+  const oscStatusVersion = useOscStatusVersion()
   const filtered = React.useMemo(() => {
-    let result = [...assets]
+    let result = assets.filter(passesStatusFilter)
 
     if (sortKey !== 'custom') {
       result.sort((a, b) => {
         let cmp = 0
         if (sortKey === 'date') {
-          cmp = new Date(a.updated_at).getTime() - new Date(b.updated_at).getTime()
+          // OSC 0023: by the latest version's upload (updated_at also moved on renames and moves)
+          cmp = new Date(itemTime(a)).getTime() - new Date(itemTime(b)).getTime()
         } else if (sortKey === 'name') {
           cmp = a.name.localeCompare(b.name)
         } else if (sortKey === 'status') {
-          cmp = statusOrder[a.status] - statusOrder[b.status]
+          cmp = statusOrder[effectiveStatus(a)] - statusOrder[effectiveStatus(b)]
         } else if (sortKey === 'type') {
           cmp = a.asset_type.localeCompare(b.asset_type)
         }
@@ -204,7 +205,7 @@ export function AssetGrid({
     }
 
     return result
-  }, [assets, sortKey, sortDirection])
+  }, [assets, sortKey, sortDirection, oscStatusVersion])
 
   const showFolders = !flattenFolders && folders && folders.length > 0
 
@@ -223,14 +224,14 @@ export function AssetGrid({
   }
 
   return (
-    <div className="flex flex-col gap-3 relative">
+    <div className="flex min-w-0 flex-col gap-3 relative">
       {/* ─── Share Selection Mode Bar ──────────────────────────────────── */}
       {shareMode && (
-        <div className="flex items-center justify-between rounded-lg border border-accent/30 bg-accent/5 px-4 py-2.5">
+        <div className="flex flex-wrap items-center gap-2 justify-between rounded-lg border border-accent/30 bg-accent/5 px-4 py-2.5">
           <span className="text-sm font-medium text-text-primary">
             Select items to share
           </span>
-          <div className="flex items-center gap-2">
+          <div className="flex min-w-0 flex-wrap items-center gap-2">
             <Button
               variant="secondary"
               size="sm"
@@ -258,7 +259,7 @@ export function AssetGrid({
 
       {/* ─── Navigator Bar (Frame.io style) ─────────────────────────────── */}
       {!shareMode && (
-        <div className="flex items-center gap-1 border-b border-border pb-2.5">
+        <div className="flex min-w-0 flex-wrap items-center gap-2 border-b border-border pb-2.5">
           {/* Left group: Appearance + Fields + Sort */}
           <AppearancePopover />
 
@@ -270,12 +271,15 @@ export function AssetGrid({
 
           {/* Right group: action buttons passed from parent */}
           {actions && (
-            <div className="flex items-center gap-2">
+            <div className="flex w-full min-w-0 flex-wrap items-center gap-2 sm:w-auto">
               {actions}
             </div>
           )}
         </div>
       )}
+
+      {/* OSC status labels: filter chips (from the unfiltered list, so they never vanish) */}
+      <StatusFilterBar assets={assets} />
 
       {/* ─── Grid view: folders section ──────────────────────────────── */}
       {showFolders && layout === 'grid' && (
@@ -561,6 +565,7 @@ export function AssetGrid({
                 <div className="flex-1 min-w-0">
                   <p className="text-sm font-medium text-text-primary truncate leading-snug">{asset.name}</p>
                 </div>
+                <div className="shrink-0"><StatusPill asset={asset} size="xs" /></div>
                 {/* Uploader */}
                 {showUploader && (
                   <div className="hidden md:block w-32 text-xs text-text-tertiary truncate shrink-0">
@@ -575,11 +580,11 @@ export function AssetGrid({
                 )}
                 {/* Version */}
                 <div className="hidden md:block w-10 text-center text-xs text-text-tertiary tabular-nums shrink-0">
-                  {versionCount ? `v${versionCount}` : 'v1'}
+                  {versionLabels[asset.id] || (versionCount ? `v${versionCount}` : 'v1')}
                 </div>
                 {/* Date */}
                 <div className="hidden sm:block w-28 text-xs text-text-tertiary shrink-0">
-                  {new Date(asset.created_at).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}
+                  {new Date(itemTime(asset)).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}
                 </div>
                 {/* Assignee */}
                 <div className="w-8 shrink-0 flex justify-center">
@@ -655,7 +660,7 @@ export function AssetGrid({
 
       {/* Bottom selection action bar (Frame.io style) */}
       {!shareMode && totalSelected > 0 && (
-        <div className="sticky bottom-0 z-20 flex items-center gap-3 rounded-lg border border-border bg-bg-elevated px-4 py-2.5 shadow-xl">
+        <div className="sticky bottom-0 z-20 flex min-w-0 flex-wrap items-center gap-3 rounded-lg border border-border bg-bg-elevated px-4 py-2.5 shadow-xl">
           <button onClick={clearSelection} className="text-text-tertiary hover:text-text-primary transition-colors">
             <X className="h-4 w-4" />
           </button>

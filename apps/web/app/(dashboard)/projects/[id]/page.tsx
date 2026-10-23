@@ -31,6 +31,8 @@ import {
   formatBytes,
   assetNameFromFile,
   uploadNameForFile,
+  versionLabel,
+  itemTime,
 } from "@/lib/utils";
 import { api } from "@/lib/api";
 import { withBasePath } from "@/lib/base-path";
@@ -45,6 +47,7 @@ import { useUploadStore } from "@/stores/upload-store";
 import { useAuthStore } from "@/stores/auth-store";
 import { useViewStore } from "@/stores/view-store";
 import { useBreadcrumbStore } from "@/stores/breadcrumb-store";
+import { useUrlFolder } from "@/hooks/use-url-folder"; // OSC 0021
 import { useComments } from "@/hooks/use-comments";
 import { useFolders, useTrash } from "@/hooks/use-folders";
 import { useShareLinks } from "@/hooks/use-share-links";
@@ -157,6 +160,7 @@ export default function ProjectDetailPage() {
     deleteComment,
     addReaction,
     removeReaction,
+    createComment,
   } = useComments(selectedAsset?.id || null, selectedVersionId);
 
   const { data: project, isLoading: loadingProject } = useSWR<Project>(
@@ -232,6 +236,16 @@ export default function ProjectDetailPage() {
     const map: Record<string, number> = {};
     for (const a of assets) {
       if (a.latest_version) map[a.id] = a.latest_version.version_number;
+    }
+    return map;
+  }, [assets]);
+
+  // OSC 0015: the label shown (our vN from the file name), separate from the count above.
+  const versionLabels = React.useMemo(() => {
+    if (!assets) return {};
+    const map: Record<string, string> = {};
+    for (const a of assets) {
+      if (a.latest_version) map[a.id] = versionLabel(a.latest_version);
     }
     return map;
   }, [assets]);
@@ -427,6 +441,15 @@ export default function ProjectDetailPage() {
     },
     [projectId],
   );
+
+  // OSC 0021: the header breadcrumb (and browser Back) change ?folder= on this same page; follow it.
+  // Before, the folder was read from the URL only once, so clicking a parent folder did nothing.
+  useUrlFolder((folderId) => {
+    setCurrentFolderId(folderId);
+    setShowTrash(false);
+    setShowShareLinks(false);
+    setSelectedShareLink(null);
+  });
 
   return (
     // No refusal handler here: it lives on the dashboard shell, which wraps
@@ -667,9 +690,20 @@ export default function ProjectDetailPage() {
         onClick={() => setSelectedAsset(null)}
       >
         <div className="px-5 pt-3 pb-6 space-y-3">
+          {canSeeShareLinks && (
+            <div className="flex gap-2 lg:hidden">
+              <button className="rounded-md border border-border px-3 py-2 text-sm" onClick={(e) => {
+                e.stopPropagation(); setShowShareLinks(false); setSelectedShareLink(null); setShowTrash(false);
+              }}>Assets</button>
+              <button className="rounded-md border border-border px-3 py-2 text-sm" onClick={(e) => {
+                e.stopPropagation(); setShowShareLinks(true); setSelectedShareLink(null); setShowTrash(false); setCurrentFolderId(null);
+              }}>All Share Links ({shareLinks.length})</button>
+            </div>
+          )}
           {/* Asset grid, Share links, or Trash view */}
           {showShareLinks && !selectedShareLink ? (
             <ShareLinksTable
+              projectId={projectId}
               shareLinks={shareLinks}
               onSelectLink={(token) => setSelectedShareLink(token)}
               onToggleEnabled={(token, enabled) =>
@@ -767,6 +801,7 @@ export default function ProjectDetailPage() {
               assignees={assigneesMap}
               thumbnails={thumbnails}
               versionCounts={versionCounts}
+              versionLabels={versionLabels}
               authorNames={authorNames}
               fileSizes={fileSizes}
               selectedAssetId={selectedAsset?.id}
@@ -886,6 +921,7 @@ export default function ProjectDetailPage() {
                     <Button
                       variant="secondary"
                       size="sm"
+                      aria-label="Manage members"
                       onClick={() => setMembersDialogOpen(true)}
                     >
                       <Users className="h-4 w-4" />
@@ -903,7 +939,7 @@ export default function ProjectDetailPage() {
                   )}
                   {canCreateFolder && (
                     <button
-                      className="flex items-center gap-1.5 h-8 px-3 rounded-lg border border-border text-text-secondary hover:text-text-primary hover:bg-bg-hover text-[13px] transition-colors"
+                      className="flex shrink-0 items-center gap-1.5 h-8 px-3 rounded-lg border border-border whitespace-nowrap text-text-secondary hover:text-text-primary hover:bg-bg-hover text-[13px] transition-colors"
                       onClick={() => {
                         setFolderDialogParentId(currentFolderId);
                         setFolderDialogOpen(true);
@@ -1067,7 +1103,10 @@ export default function ProjectDetailPage() {
                         onAddReaction={addReaction}
                         onRemoveReaction={removeReaction}
                         onReply={() => {}}
-                        onSubmitReply={async () => {}}
+                        // Was a no-op: the reply box cleared and saved nothing.
+                        onSubmitReply={async (parentId: string, body: string) => {
+                          await createComment(body, undefined, undefined, undefined, parentId);
+                        }}
                       />
                     ) : (
                       <div className="flex-1 flex items-center justify-center p-6 text-center">
@@ -1131,7 +1170,7 @@ export default function ProjectDetailPage() {
                           Uploaded
                         </span>
                         <span className="text-xs text-text-primary">
-                          {formatRelativeTime(selectedAsset.created_at)}
+                          {formatRelativeTime(itemTime(selectedAsset))}
                         </span>
                       </div>
                       {authorNames[selectedAsset.created_by] && (
@@ -1160,7 +1199,7 @@ export default function ProjectDetailPage() {
                             Version
                           </span>
                           <span className="text-xs text-text-primary">
-                            v{selectedAsset.latest_version.version_number}
+                            {versionLabel(selectedAsset.latest_version)}
                           </span>
                         </div>
                       )}
