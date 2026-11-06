@@ -371,11 +371,6 @@ def bulk_move(
 
     # Move folders
     if body.folder_ids:
-        descendants = set()
-        if body.target_folder_id:
-            descendants = set(_get_descendant_ids(db, body.target_folder_id))
-            descendants.add(body.target_folder_id)
-
         folders = (
             db.query(Folder)
             .filter(
@@ -389,7 +384,7 @@ def bulk_move(
             raise HTTPException(status_code=400, detail="Some folders not found in this project")
 
         for f in folders:
-            if f.id in descendants or f.id == body.target_folder_id:
+            if body.target_folder_id == f.id or body.target_folder_id in _get_descendant_ids(db, f.id):
                 raise HTTPException(
                     status_code=400,
                     detail=f"Cannot move folder '{f.name}' into itself or a subfolder",
