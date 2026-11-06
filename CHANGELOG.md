@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- OSC 0028: disabled-by-default scoped, hashed bot credentials, separate non-login actors and credential administration.
+
 ### Fixed
 
 - Project navigation and selection action bars wrap on phones so Share, New Folder, Upload and bulk actions remain onscreen.

@@ -36,6 +36,9 @@ class Settings(BaseSettings):
         extra="ignore"  # Ignore extra env vars not in model
     )
 
+    osc_bot_access_enabled: bool = False
+    osc_bot_requests_per_minute: int = 60
+
     database_url: str
     redis_url: str
     s3_storage: str = "minio"  # "s3" for AWS S3, "minio" for local MinIO
