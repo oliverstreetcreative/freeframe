@@ -12,6 +12,15 @@ from ..services.redis_service import verify_share_session
 # ── Project-level ──────────────────────────────────────────────────────────────
 
 def get_project_member(db: Session, project_id: uuid.UUID, user_id: uuid.UUID) -> ProjectMember | None:
+    # Only set by the dedicated bot entry point after credential validation.
+    # No JWT or ordinary REST request installs this request-local capability.
+    from .osc_bot_auth import BotContext
+    from types import SimpleNamespace
+    context = db.info.get("osc_bot_context")
+    if isinstance(context, BotContext) and context.actor.id == user_id:
+        if context.token.project_ids is not None and str(project_id) not in context.token.project_ids:
+            raise HTTPException(403, "Bot project refused")
+        return SimpleNamespace(role=ProjectRole.editor, user_id=user_id, project_id=project_id)
     return db.query(ProjectMember).filter(
         ProjectMember.project_id == project_id,
         ProjectMember.user_id == user_id,
