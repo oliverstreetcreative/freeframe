@@ -64,11 +64,15 @@ def plan_order(rows):
 
 def _enabled_links_serving(db: Session, asset: Asset, override=()) -> list[str]:
     q = text("""
+        WITH RECURSIVE ancestors AS (
+            SELECT id, parent_id FROM folders WHERE id = :f
+            UNION SELECT f.id, f.parent_id FROM folders f JOIN ancestors a ON f.id = a.parent_id
+        )
         SELECT DISTINCT sl.token, sl.title FROM share_links sl
         LEFT JOIN share_link_items sli ON sli.share_link_id = sl.id
         WHERE sl.is_enabled AND sl.deleted_at IS NULL
           AND (sl.asset_id = :a OR sli.asset_id = :a
-               OR (:f IS NOT NULL AND (sl.folder_id = :f OR sli.folder_id = :f))
+               OR (sl.folder_id IN (SELECT id FROM ancestors) OR sli.folder_id IN (SELECT id FROM ancestors))
                -- a whole-project link (no asset, folder or items) serves every item in the project
                OR (sl.project_id = :p AND sl.asset_id IS NULL AND sl.folder_id IS NULL
                    AND NOT EXISTS (SELECT 1 FROM share_link_items x WHERE x.share_link_id = sl.id)))""")
@@ -81,6 +85,10 @@ def _enabled_links_serving(db: Session, asset: Asset, override=()) -> list[str]:
 def merge(body: MergeIn, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
     if not getattr(current_user, "is_superadmin", False):
         raise HTTPException(403, "Superadmin only")
+    return merge_service(body, db, current_user)
+
+
+def merge_service(body, db, current_user):
     target = db.query(Asset).filter(Asset.id == body.target_asset_id, Asset.deleted_at.is_(None)).first()
     if not target:
         raise HTTPException(404, "Target item not found")
@@ -210,6 +218,10 @@ def set_version_label(version_id: uuid.UUID, body: LabelIn, db: Session = Depend
     "v2 · B lastair" (Sam picks between them). Superadmin only; label only, nothing else changes."""
     if not getattr(current_user, "is_superadmin", False):
         raise HTTPException(403, "Superadmin only")
+    return set_label_service(version_id, body, db)
+
+
+def set_label_service(version_id, body, db):
     v = db.query(AssetVersion).filter(AssetVersion.id == version_id, AssetVersion.deleted_at.is_(None)).first()
     if not v:
         raise HTTPException(404, "Version not found")
