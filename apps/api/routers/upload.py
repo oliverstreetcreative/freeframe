@@ -623,8 +623,6 @@ def complete_upload(
         # Read the ids before the commit: `expire_on_commit` is on, so touching
         # them afterwards costs a fresh SELECT per completion.
         asset_id, version_id = version.asset_id, version.id
-        from ..services.osc_bot_operations import verify_upload_bytes
-        verify_upload_bytes(db, version, media_file)
         _reconcile_size()
 
         # Claim the version rather than assigning to it. The status check above is

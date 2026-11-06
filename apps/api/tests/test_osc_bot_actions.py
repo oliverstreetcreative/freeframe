@@ -87,7 +87,7 @@ def test_mcp_lifecycle_and_scoped_catalog(review):
     assert rpc(r,'ping',headers={**r.headers,'MCP-Protocol-Version':'invalid'}).status_code==400
     assert rpc(r,'ping',headers=r.human).status_code==401
     assert r.client.post('/mcp',json={}).status_code==401
-    assert r.client.post('/mcp', headers=r.headers, content=b'x'*65537).status_code==413
+    assert r.client.post('/mcp', headers={**r.headers,'Content-Type':'application/json'}, content=b'x'*65537).status_code==413
 
 
 def test_revocation_over_http_and_no_bot_admin_session(review):
@@ -251,3 +251,82 @@ def test_merge_reuses_superadmin_service_and_refuses_client_links(review):
     assert response.status_code==200,response.text
     r.db.refresh(v);r.db.refresh(source)
     assert v.asset_id==r.asset.id and source.folder_id is not None and source.deleted_at is None
+
+@pytest.mark.parametrize('tool', list(TOOLS))
+def test_every_tool_checks_its_scope(review, tool):
+    r=review
+    args={
+        'project_id':str(r.project.id),'asset_id':str(r.asset.id),'version_id':str(r.version.id),
+        'folder_id':str(uuid.uuid4()),'filename':'fixture.mp4','sha256':'a'*64,'item':'01_SPOT','file_size_bytes':3,
+        'mime_type':'video/mp4','s3_key':'raw/fixture','upload_id':'fixture','part_number':1,'stem':'fixture_job',
+        'name':'Fixture name','label':'Fixture label','target_asset_id':str(r.asset.id),'source_asset_ids':[str(r.asset.id)],
+        'comment_id':str(r.comment.id),'target_type':'asset','target_id':str(r.asset.id),'reason':'Fixture cleanup','receipt_id':str(uuid.uuid4())}
+    schema=TOOLS[tool][1]
+    required={k:args[k] for k in schema.model_fields if schema.model_fields[k].is_required()}
+    r.token.scopes=[];r.db.commit()
+    assert call(r,tool,**required).status_code==403
+
+
+def test_cannot_move_private_item_into_enabled_client_folder(review):
+    r=review
+    folder=Folder(project_id=r.project.id,name='Client delivery',created_by=r.admin.id)
+    r.db.add(folder);r.db.flush()
+    r.db.add(ShareLink(token='fixture-'+str(uuid.uuid4()),folder_id=folder.id,created_by=r.admin.id,is_enabled=True));r.db.commit()
+    assert call(r,'move_asset',asset_id=r.asset.id,folder_id=folder.id).status_code==409
+    assert call(r,'bulk_move',project_id=r.project.id,asset_ids=[str(r.asset.id)],target_folder_id=str(folder.id)).status_code==409
+    assert r.asset.folder_id is None
+
+
+def test_complete_upload_queues_worker_and_reports_ready(review):
+    r=review
+    with patch('apps.api.routers.upload.create_multipart_upload',return_value='fixture-multipart'),patch('apps.api.routers.upload.upload_guard_error',return_value=None):
+        response=call(r,'upload_version',project_id=r.project.id,item='NEW',filename='complete.mp4',sha256=hashlib.sha256(b'abc').hexdigest(),file_size_bytes=3,mime_type='video/mp4',new_item=True)
+    assert response.status_code==200,response.text
+    plan=response.json()
+    with patch('apps.api.routers.upload.list_upload_parts',return_value=[{'PartNumber':1,'Size':3,'ETag':'"fixture"'}]),patch('apps.api.routers.upload.complete_multipart_upload'),patch('apps.api.routers.upload.head_object_size',return_value=3),patch('apps.api.routers.upload._trigger_processing') as process,patch('apps.api.services.s3_service.get_s3_client') as storage:
+        storage.return_value.get_object.return_value['Body'].iter_chunks.return_value=[b'abc']
+        response=call(r,'complete_upload',**{k:plan[k] for k in ('s3_key','upload_id','asset_id','version_id')})
+        assert response.status_code==200,response.text
+        process.assert_called_once()
+    assert call(r,'get_version',version_id=plan['version_id']).json()['ready'] is False
+    v=r.db.get(AssetVersion,uuid.UUID(plan['version_id']));v.processing_status=ProcessingStatus.ready;r.db.commit()
+    assert call(r,'get_version',version_id=plan['version_id']).json()['ready'] is True
+
+
+def test_future_expiry_is_not_misread_in_database_timezone(review):
+    r=review
+    r.token.expires_at=datetime.now(timezone.utc)+timedelta(minutes=10);r.db.commit()
+    assert rpc(r,'ping').status_code==200
+
+@pytest.mark.parametrize('content,ready',[(b'abc',True),(b'wrong',False)])
+def test_worker_never_transcodes_unverified_bot_bytes(review, content, ready):
+    r=review
+    from apps.api.tasks import transcode_tasks
+    r.version.osc_content_sha256=hashlib.sha256(b'abc').hexdigest()
+    r.db.add(BotUpload(version_id=r.version.id,filename='worker.mp4',sha256=r.version.osc_content_sha256));r.db.commit()
+    version_id = r.version.id
+    with patch.object(transcode_tasks,'SessionLocal',return_value=r.db),patch.object(transcode_tasks,'_process_video') as encoder,patch.object(transcode_tasks,'_publish_event'),patch('apps.api.services.s3_service.get_s3_client') as storage,patch.object(transcode_tasks,'get_s3_client'),patch.object(transcode_tasks.process_asset,'retry',side_effect=RuntimeError('fixture retry')):
+        storage.return_value.get_object.return_value['Body'].iter_chunks.return_value=[content]
+        if ready: transcode_tasks.process_asset.run(str(r.asset.id),str(r.version.id))
+        else:
+            with pytest.raises(RuntimeError,match='fixture retry'):transcode_tasks.process_asset.run(str(r.asset.id),str(r.version.id))
+        assert encoder.called is ready
+    v=r.db.get(AssetVersion,version_id)
+    assert (v.processing_status==ProcessingStatus.ready) is ready
+    fingerprint=r.db.query(BotUpload).filter_by(version_id=v.id).one()
+    assert (fingerprint.verified_at is not None) is ready
+
+
+def test_folder_bulk_move_cannot_cycle_through_gui_or_mcp(review):
+    r=review
+    from apps.api.routers import folders
+    from apps.api.schemas.folder import BulkMoveRequest
+    parent=Folder(project_id=r.project.id,name='Parent',created_by=r.admin.id)
+    r.db.add(parent);r.db.flush()
+    child=Folder(project_id=r.project.id,name='Child',parent_id=parent.id,created_by=r.admin.id)
+    r.db.add(child);r.db.commit()
+    assert call(r,'bulk_move',project_id=r.project.id,folder_ids=[str(parent.id)],target_folder_id=str(child.id)).status_code==400
+    with pytest.raises(HTTPException) as exc:
+        folders.bulk_move(r.project.id,BulkMoveRequest(folder_ids=[parent.id],target_folder_id=child.id),r.db,r.admin)
+    assert exc.value.status_code==400
+    assert parent.parent_id is None and child.parent_id==parent.id

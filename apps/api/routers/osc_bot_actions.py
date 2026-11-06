@@ -2,7 +2,6 @@
 import json
 import uuid
 from datetime import datetime, timezone, timedelta
-from urllib.parse import urlparse
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, BackgroundTasks
 from fastapi.encoders import jsonable_encoder
 from fastapi.responses import JSONResponse
@@ -68,14 +67,24 @@ def action(name: str, arguments: dict, tasks: BackgroundTasks, response: Respons
     actor, ctx = identity
     return run(db, actor, ctx, name, arguments, tasks)
 
+def validate_origin(request):
+    origin = request.headers.get("origin")
+    if origin and origin != settings.frontend_origin:
+        raise HTTPException(403, "Origin refused")
+
+@router.api_route("/mcp", methods=["GET", "DELETE"], include_in_schema=False)
+def no_mcp_stream(request: Request):
+    validate_origin(request)
+    raise HTTPException(405, "This stateless MCP endpoint uses POST", headers={"Allow": "POST"})
+
 @router.post("/mcp")
 async def mcp(request: Request, tasks: BackgroundTasks, db: Session=Depends(get_db), credentials=Depends(bearer)):
     version = request.headers.get("mcp-protocol-version", "2025-03-26")
     if version not in ("2025-03-26", "2025-06-18"):
         raise HTTPException(400, "Unsupported MCP protocol version")
-    origin = request.headers.get("origin")
-    if origin and origin != settings.frontend_origin:
-        raise HTTPException(403, "Origin refused")
+    validate_origin(request)
+    if not request.headers.get("content-type", "").lower().startswith("application/json"):
+        raise HTTPException(415, "MCP requires application/json")
     if credentials is None: raise HTTPException(401, "Bot credential required")
     ctx = await run_in_threadpool(authenticate, db, credentials.credentials)
     # Check while streaming: Content-Length is caller controlled and can be absent.
@@ -100,9 +109,12 @@ async def mcp(request: Request, tasks: BackgroundTasks, db: Session=Depends(get_
         audit(db, ctx.token.id, "mcp_notification", 202)
         return Response(status_code=202, headers=headers)
     if not isinstance(ident, (str, int)) or isinstance(ident, bool):
+        audit(db, ctx.token.id, "mcp_invalid", 400)
         raise HTTPException(400, "Invalid request id")
     params = body.get("params", {})
-    if not isinstance(params, dict): raise HTTPException(400, "Invalid params")
+    if not isinstance(params, dict):
+        audit(db, ctx.token.id, "mcp_invalid", 400)
+        raise HTTPException(400, "Invalid params")
     if method == "initialize":
         offered = params.get("protocolVersion")
         result = {"protocolVersion": offered if offered in ("2025-03-26", "2025-06-18") else "2025-06-18",
@@ -115,7 +127,9 @@ async def mcp(request: Request, tasks: BackgroundTasks, db: Session=Depends(get_
                    for n,(scope,schema,g) in TOOLS.items() if scope in ctx.token.scopes]}
     elif method == "tools/call":
         name = params.get("name")
-        if not isinstance(name, str): raise HTTPException(400, "Tool name required")
+        if not isinstance(name, str):
+            audit(db, ctx.token.id, "mcp_invalid", 400)
+            raise HTTPException(400, "Tool name required")
         try:
             value = await run_in_threadpool(run, db, ctx.actor, ctx, name, params.get("arguments", {}), tasks)
             result = {"content": [{"type": "text", "text": json.dumps(jsonable_encoder(value))}], "isError": False}

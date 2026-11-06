@@ -54,6 +54,8 @@ class Asset(Base):
     )
 
 class AssetVersion(Base):
+    # OSC 0030: only bot uploads carry an expected content hash. Verified by the worker before transcoding.
+    osc_content_sha256: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
     __tablename__ = "asset_versions"
     __table_args__ = (UniqueConstraint("asset_id", "version_number", name="uq_asset_versions_asset_version"),)
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
