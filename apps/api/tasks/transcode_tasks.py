@@ -66,6 +66,11 @@ def process_asset(self, asset_id: str, version_id: str):
         final_attempt = self.request.retries >= self.max_retries
 
         try:
+            # Hash in the existing worker so a large master cannot exhaust an HTTP timeout.
+            # No encoder or ready state is reached until the actual object bytes match.
+            from ..services.osc_bot_operations import verify_upload_bytes
+            verify_upload_bytes(db, version, media_file)
+            db.commit()
             if asset.asset_type in (AssetType.video,):
                 _process_video(
                     db, asset, version, media_file, s3, output_prefix,

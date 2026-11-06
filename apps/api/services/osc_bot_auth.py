@@ -38,7 +38,7 @@ def rate_limit(token_id):
     except Exception:
         raise HTTPException(503, "Bot rate limiter unavailable") from None
     if count > settings.osc_bot_requests_per_minute:
-        raise HTTPException(429, "Bot request limit exceeded")
+        raise HTTPException(429, "Bot request limit exceeded", headers={"Retry-After": str(60 - int(time.time()) % 60)})
 
 @dataclass
 class BotContext:
@@ -53,9 +53,11 @@ class BotContext:
                 raise HTTPException(403, "Bot project refused")
 
 def authenticate(db, value):
+    if not settings.osc_bot_access_enabled:
+        raise HTTPException(401, "Bot credential refused")
     row = None
     try:
-        if not settings.osc_bot_access_enabled or not TOKEN_PATTERN.fullmatch(value):
+        if not TOKEN_PATTERN.fullmatch(value):
             raise HTTPException(401, "Bot credential refused")
         fingerprint = digest(value)
         row = db.query(BotToken).filter(BotToken.token_hash == fingerprint).populate_existing().first()

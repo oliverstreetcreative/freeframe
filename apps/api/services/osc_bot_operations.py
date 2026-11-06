@@ -5,13 +5,12 @@ request-local and never become JWT sessions or superadmin permissions.
 """
 import hashlib
 import hmac
-import secrets
 import uuid
-from datetime import datetime, timezone, timedelta
+from datetime import datetime, timezone
 from typing import Literal
 from fastapi import BackgroundTasks, HTTPException
 from pydantic import BaseModel, ConfigDict, Field
-from sqlalchemy import text, or_
+from sqlalchemy import text
 from ..config import settings
 from ..models.asset import Asset, AssetVersion, MediaFile, ProcessingStatus
 from ..models.folder import Folder
@@ -156,16 +155,18 @@ def uploads(db, filename=None, sha256=None, ctx=None):
 
 def verify_upload_bytes(db, version, media_file):
     # Ordinary uploads keep their existing path; bot uploads cannot process until verified.
-    if db.info.get("osc_verify_upload") is not True: return
+    expected = getattr(version, "osc_content_sha256", None)
+    if not isinstance(expected, str): return
     fingerprint = db.query(BotUpload).filter(BotUpload.version_id == version.id).first()
-    if fingerprint is None or fingerprint.verified_at is not None: return
+    if fingerprint is None: raise HTTPException(409, "Upload integrity record missing")
+    if fingerprint.verified_at is not None: return
     from .s3_service import get_s3_client
     body = None
     try:
         body = get_s3_client().get_object(Bucket=settings.s3_bucket, Key=media_file.s3_key_raw)["Body"]
         checksum = hashlib.sha256()
         for chunk in body.iter_chunks(chunk_size=1024 * 1024): checksum.update(chunk)
-        matches = hmac.compare_digest(checksum.hexdigest(), fingerprint.sha256)
+        matches = hmac.compare_digest(checksum.hexdigest(), expected) and hmac.compare_digest(expected, fingerprint.sha256)
     except Exception:
         raise HTTPException(503, "Could not verify upload content; retry completion") from None
     finally:
@@ -182,8 +183,9 @@ def upload_version(db, actor, ctx, a):
     if "/" in a.filename or "\\" in a.filename: raise HTTPException(422, "filename must be a basename")
     # Serialize dedupe and item creation across workers. No process-local lock.
     if db.bind.dialect.name == "postgresql":
-        lock = int(a.sha256[:16], 16) - (1 << 63)
-        db.execute(text("SELECT pg_advisory_xact_lock(:key)"), {"key": lock})
+        identities = ["hash:" + a.sha256, "filename:" + a.filename, "item:" + str(a.project_id) + ":" + a.item]
+        locks = sorted({int(hashlib.sha256(x.encode()).hexdigest()[:16], 16) - (1 << 63) for x in identities})
+        for lock in locks: db.execute(text("SELECT pg_advisory_xact_lock(:key)"), {"key": lock})
     duplicate = db.query(BotUpload).filter(BotUpload.sha256 == a.sha256).first()
     existing = uploads(db, filename=a.filename, ctx=ctx)
     if duplicate is not None or existing: raise HTTPException(409, "This file was already uploaded; use find_upload")
@@ -195,6 +197,7 @@ def upload_version(db, actor, ctx, a):
     plan = upload.initiate_upload_service(InitiateUploadRequest(project_id=a.project_id,
         asset_name=a.item, asset_id=matches[0].id if matches else None,
         original_filename=a.filename, file_size_bytes=a.file_size_bytes, mime_type=a.mime_type), db, actor, commit=False)
+    row(db, AssetVersion, plan.version_id).osc_content_sha256 = a.sha256
     db.add(BotUpload(version_id=plan.version_id, filename=a.filename, sha256=a.sha256))
     db.commit()
     return {**plan.model_dump(), "state": "uploading", "next": "presign_part", "part_count":
@@ -231,6 +234,8 @@ def archive(db, actor, target_type, target):
     if archive_folder is None:
         archive_folder = Folder(project_id=project_id, name="_archive", created_by=actor.id)
         db.add(archive_folder); db.flush()
+    if target_type == "folder" and archive_folder.id in folders._get_descendant_ids(db, target.id):
+        raise HTTPException(409, "Archive folder is inside this target")
     parent_field = "folder_id" if target_type == "asset" else "parent_id"
     if target.id == archive_folder.id or getattr(target, parent_field) == archive_folder.id:
         raise HTTPException(409, "Already archived")
@@ -277,7 +282,6 @@ def dispatch(db, actor, ctx, name, arguments, tasks=None):
         v = row(db, AssetVersion, f.version_id); guard(ctx, scope, project_for(db, v))
         return upload.presign_part(PresignPartRequest(**a.model_dump()), db, actor)
     if name == "complete_upload":
-        db.info["osc_verify_upload"] = True
         return upload.complete_upload(CompleteUploadRequest(**a.model_dump()), tasks or BackgroundTasks(), db, actor)
     if name == "create_project":
         if ctx and ctx.token.project_ids is not None: raise HTTPException(403, "Project-scoped tokens cannot create projects")
@@ -305,12 +309,14 @@ def dispatch(db, actor, ctx, name, arguments, tasks=None):
             guard(ctx, scope, folder.project_id)
             check_folder_links(db, folder)
             ids = folders._get_descendant_ids(db, folder.id) + [folder.id]
+            if a.target_folder_id in ids: raise HTTPException(400, "Cannot move a folder into its own subtree")
             for asset in db.query(Asset).filter(Asset.folder_id.in_(ids), Asset.deleted_at.is_(None)).all(): check_links(db, asset)
         return folders.bulk_move(a.project_id, BulkMoveRequest(**a.model_dump(exclude={"project_id"})), db, actor)
     if name == "set_version_label":
         v = row(db, AssetVersion, a.version_id); check_links(db, row(db, Asset, v.asset_id))
         return osc_merge.set_label_service(a.version_id, osc_merge.LabelIn(label=a.label), db)
     if name == "merge_into_stack":
+        check_links(db, row(db, Asset, a.target_asset_id))
         for ident in a.source_asset_ids:
             guard(ctx, scope, row(db, Asset, ident).project_id)
         return osc_merge.merge_service(osc_merge.MergeIn(target_asset_id=a.target_asset_id,
