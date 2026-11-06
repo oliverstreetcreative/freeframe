@@ -122,3 +122,6 @@ def health():
 
 from .routers import osc_bot_admin
 app.include_router(osc_bot_admin.router)
+
+from .routers import osc_bot_actions
+app.include_router(osc_bot_actions.router)
