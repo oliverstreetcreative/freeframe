@@ -161,6 +161,14 @@ services:
       - traefik.http.routers.api-secure.service=api
       # Shared
       - traefik.http.middlewares.strip-api-prefix.stripprefix.prefixes=/api
+      # MCP keeps its path and uses its own bearer authentication, bypassing the web shell.
+      - traefik.http.routers.review-mcp.rule=Path(`/mcp`)
+      - traefik.http.routers.review-mcp.entrypoints=web
+      - traefik.http.routers.review-mcp.service=api
+      - traefik.http.routers.review-mcp-secure.rule=Path(`/mcp`)
+      - traefik.http.routers.review-mcp-secure.entrypoints=websecure
+      - traefik.http.routers.review-mcp-secure.tls.certresolver=letsencrypt
+      - traefik.http.routers.review-mcp-secure.service=api
       - traefik.http.services.api.loadbalancer.server.port=8000
     restart: unless-stopped
 

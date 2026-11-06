@@ -15,6 +15,7 @@ import { useAuthStore } from "@/stores/auth-store";
 import { useRouter } from "next/navigation";
 import type { User, UserStatus } from "@/types";
 import { InstanceSettingsTab } from "@/components/settings/instance-settings-tab";
+import { BotAccessTab } from "@/components/settings/bot-access-tab";
 import { BrandingTab } from "@/components/settings/branding-tab";
 
 function BulkInviteDialog() {
@@ -169,7 +170,7 @@ function userStatusBadge(status: UserStatus) {
 export default function AdminPage() {
   const { user, isSuperAdmin } = useAuthStore();
   const router = useRouter();
-  const [tab, setTab] = React.useState<"users" | "instance" | "branding">("users");
+  const [tab, setTab] = React.useState<"users" | "instance" | "branding" | "bots">("users");
 
   const { data: usersResp, isLoading: loadingUsers } = useSWR<User[]>(
     isSuperAdmin ? "/admin/users" : null,
@@ -186,7 +187,7 @@ export default function AdminPage() {
   // Read after mount so the server and client render the same initial markup.
   React.useEffect(() => {
     const requested = new URLSearchParams(window.location.search).get("tab");
-    if (requested === "instance" || requested === "branding") {
+    if (requested === "instance" || requested === "branding" || requested === "bots") {
       setTab(requested);
     }
   }, []);
@@ -247,7 +248,7 @@ export default function AdminPage() {
   }
 
   return (
-    <div className="p-6 space-y-8">
+    <div className="p-4 space-y-8 sm:p-6">
       {/* Header */}
       <div className="flex items-center gap-3">
         <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-accent-muted">
@@ -262,14 +263,16 @@ export default function AdminPage() {
               ? "Configure this instance"
               : tab === "branding"
                 ? "Make this instance look like yours"
-                : "Manage platform users"}
+                : tab === "bots"
+                  ? "Manage bot access and Review actions"
+                  : "Manage platform users"}
           </p>
         </div>
       </div>
 
       {/* Sub-tabs */}
-      <div className="flex gap-1 border-b border-border">
-        {([["users", "Users"], ["instance", "Instance settings"], ["branding", "Branding"]] as const).map(([key, label]) => (
+      <div className="flex flex-wrap gap-1 border-b border-border">
+        {([["users", "Users"], ["instance", "Instance settings"], ["branding", "Branding"], ["bots", "Bot access"]] as const).map(([key, label]) => (
           <button
             key={key}
             onClick={() => setTab(key)}
@@ -287,6 +290,7 @@ export default function AdminPage() {
 
       {tab === "instance" && <InstanceSettingsTab />}
       {tab === "branding" && <BrandingTab />}
+      {tab === "bots" && <BotAccessTab />}
 
       {/* User management */}
       {tab === "users" && (

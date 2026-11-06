@@ -30,17 +30,17 @@ export default function SettingsLayout({
   const { user, isSuperAdmin } = useAuthStore()
 
   return (
-    <div className="flex h-full">
+    <div className="flex h-full min-h-0 min-w-0 flex-col md:flex-row">
       {/* Settings Sidebar */}
-      <aside className="w-56 border-r border-border bg-bg-secondary shrink-0">
-        <div className="p-4 border-b border-border">
+      <aside className="w-full border-b border-border bg-bg-secondary shrink-0 md:w-56 md:border-b-0 md:border-r">
+        <div className="hidden p-4 border-b border-border md:block">
           <h2 className="text-sm font-semibold text-text-primary">Settings</h2>
           <p className="text-xs text-text-tertiary mt-0.5">
             {user?.name ?? 'User'}
           </p>
         </div>
 
-        <nav className="p-2 space-y-0.5">
+        <nav className="flex flex-wrap gap-1 p-2 md:block md:space-y-0.5">
           {settingsNavItems.map((item) => {
             // Hide admin-only items from non-admins
             if (item.adminOnly && !isSuperAdmin) return null
@@ -68,7 +68,7 @@ export default function SettingsLayout({
       </aside>
 
       {/* Settings Content */}
-      <main className="flex-1 overflow-y-auto">
+      <main className="min-h-0 min-w-0 flex-1 overflow-y-auto">
         {children}
       </main>
     </div>
