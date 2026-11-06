@@ -16,6 +16,9 @@ from .redis_service import get_redis
 SCOPES = frozenset({"read", "upload", "organize", "notes:read", "archive", "remove:request"})
 TOKEN_PATTERN = re.compile(r"ffb_[A-Za-z0-9_-]{43}\Z")
 
+def as_utc(value):
+    return value.replace(tzinfo=timezone.utc) if value.tzinfo is None else value.astimezone(timezone.utc)
+
 def digest(value):
     return hashlib.sha256(value.encode()).hexdigest()
 
@@ -58,7 +61,7 @@ def authenticate(db, value):
         row = db.query(BotToken).filter(BotToken.token_hash == fingerprint).populate_existing().first()
         if row is None or not hmac.compare_digest(row.token_hash, fingerprint):
             raise HTTPException(401, "Bot credential refused")
-        if row.revoked_at is not None or (row.expires_at is not None and row.expires_at.replace(tzinfo=timezone.utc) <= datetime.now(timezone.utc)):
+        if row.revoked_at is not None or (row.expires_at is not None and as_utc(row.expires_at) <= datetime.now(timezone.utc)):
             raise HTTPException(401, "Bot credential refused")
         rate_limit(row.id)
         actor = db.query(User).filter(User.id == row.actor_id, User.deleted_at.is_(None)).first()
