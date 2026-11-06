@@ -8,7 +8,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
-- OSC 0028: disabled-by-default scoped, hashed bot credentials, separate non-login actors and credential administration.
+- OSC 0028–0031: disabled-by-default scoped bot credentials, first-class non-login actors, audit, Review MCP, version uploads with worker-side SHA-256 verification, notes/export parity, reversible archive and administrator-only removal confirmation.
+- Review administrator controls remain usable on phone screens; bulk folder moves cannot create parent-child cycles.
 
 ### Fixed
 

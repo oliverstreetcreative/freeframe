@@ -1,0 +1,33 @@
+# 🤖 FreeFrame edge for Railway — stands in for the Traefik service in upstream docker-compose.prod.yml.
+# One public hostname (test URL, later review.oliverstreetcreative.com):
+#   /api/*  -> api (prefix stripped, same as Traefik's strip-api-prefix)
+#   /mcp    -> api (preserve path; scoped bot authentication)
+#   /*      -> web (Next.js)
+# Railway private networking: <service>.railway.internal, IPv6 — Caddy resolves it fine.
+{
+	auto_https off
+	admin off
+}
+
+:{$PORT:8080} {
+	request_body {
+		max_size 0
+	}
+	handle /mcp {
+		reverse_proxy {$API_UPSTREAM:api.railway.internal:8000} {
+			flush_interval -1
+		}
+	}
+	handle_path /api/* {
+		reverse_proxy {$API_UPSTREAM:api.railway.internal:8000} {
+			flush_interval -1
+			transport http {
+				read_timeout 0
+				write_timeout 0
+			}
+		}
+	}
+	handle {
+		reverse_proxy {$WEB_UPSTREAM:web.railway.internal:3000}
+	}
+}

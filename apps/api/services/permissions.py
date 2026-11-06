@@ -16,6 +16,9 @@ def get_project_member(db: Session, project_id: uuid.UUID, user_id: uuid.UUID) -
     # No JWT or ordinary REST request installs this request-local capability.
     from .osc_bot_auth import BotContext
     from types import SimpleNamespace
+    action_actor = db.info.get("osc_action_actor")
+    if isinstance(action_actor, User) and action_actor.id == user_id and action_actor.is_superadmin:
+        return SimpleNamespace(role=ProjectRole.owner, user_id=user_id, project_id=project_id)
     context = db.info.get("osc_bot_context")
     if isinstance(context, BotContext) and context.actor.id == user_id:
         if context.token.project_ids is not None and str(project_id) not in context.token.project_ids:
