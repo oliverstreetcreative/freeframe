@@ -119,3 +119,6 @@ app.include_router(osc_share_meta.router)
 def health():
     return {"status": "ok"}
 
+
+from .routers import osc_bot_admin
+app.include_router(osc_bot_admin.router)
