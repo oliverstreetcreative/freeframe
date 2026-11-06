@@ -330,3 +330,13 @@ def test_folder_bulk_move_cannot_cycle_through_gui_or_mcp(review):
         folders.bulk_move(r.project.id,BulkMoveRequest(folder_ids=[parent.id],target_folder_id=child.id),r.db,r.admin)
     assert exc.value.status_code==400
     assert parent.parent_id is None and child.parent_id==parent.id
+
+
+def test_admin_gui_can_manage_a_project_created_by_a_bot(review):
+    r=review
+    _,value=issue(r.db,r.admin,'project creator',['organize'])
+    response=r.client.post('/osc/actions/create_project',headers={'Authorization':'Bearer '+value},json={'stem':'fixture_bot_created','confirmed':True})
+    assert response.status_code==200,response.text
+    project_id=response.json()['id']
+    assert r.client.post('/osc/actions/list_assets',headers=r.human,json={'project_id':project_id}).status_code==200
+    assert r.client.post('/osc/actions/create_folder',headers=r.human,json={'project_id':project_id,'name':'Fixture folder'}).status_code==200
