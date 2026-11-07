@@ -1,23 +1,6 @@
 'use client'
 
-/**
- * OSC status labels (Sam, 10/2/26: "turning things green is helpful").
- *
- * One status per asset, shown as a coloured pill on the grid thumbnail, the list row and the
- * player bar. Staff click it to change it; it saves through the existing PATCH /assets/{id}
- * (editor role). It rides on FreeFrame's own `asset.status` field. The vocabulary is OSC's and
- * shared with the client website:
- *
- *   in_review  → Needs review        (orange, OSC accent)  ← every new upload / new version
- *   draft      → In progress         (blue)
- *   client_review → Client review    (purple)              ← the one value OSC adds
- *   rejected   → Changes requested   (red)                 ← a reviewer requests changes
- *   approved   → Approved            (green)               ← a reviewer approves the latest version
- *
- * Kept in this one file (plus one-line mounts) so upstream merges stay cheap.
- * Colours are inline so Tailwind's purge can't drop them. Every pill passes WCAG AA:
- * orange/#1A1206 6.09, blue/white 5.17, purple/white 5.70, red/white 4.83, green/white 5.02.
- */
+/** OSC 0032 / O26: the Hub's five tones; saved statuses and transitions stay intact. */
 import * as React from 'react'
 import * as DropdownMenu from '@radix-ui/react-dropdown-menu'
 import { Check, ChevronDown } from 'lucide-react'
@@ -27,18 +10,8 @@ import type { Asset, AssetStatus } from '@/types'
 
 export type OscStatus = AssetStatus
 
-export const OSC_STATUSES: { value: OscStatus; label: string; bg: string; fg: string }[] = [
-  { value: 'in_review', label: 'Needs review', bg: '#E07830', fg: '#1A1206' },
-  { value: 'draft', label: 'In progress', bg: '#2563EB', fg: '#FFFFFF' },
-  { value: 'client_review', label: 'Client review', bg: '#7C3AED', fg: '#FFFFFF' },
-  { value: 'rejected', label: 'Changes requested', bg: '#DC2626', fg: '#FFFFFF' },
-  { value: 'approved', label: 'Approved', bg: '#15803D', fg: '#FFFFFF' },
-]
-const ARCHIVED = { value: 'archived' as OscStatus, label: 'Archived', bg: '#52525B', fg: '#FFFFFF' }
-
-export function statusMeta(s: OscStatus) {
-  return OSC_STATUSES.find((x) => x.value === s) ?? ARCHIVED
-}
+export { OSC_STATUSES, statusMeta } from '@/lib/osc-status'
+import { OSC_STATUSES, statusMeta } from '@/lib/osc-status'
 
 /** Grid sort order: what needs attention first, done last. */
 export const OSC_STATUS_ORDER: Record<OscStatus, number> = {
@@ -106,7 +79,7 @@ export function StatusPill({
   // is a box-shadow on that same rounded element (gap in the page colour, then the accent), and it
   // shows on keyboard focus only (:focus-visible), never as a leftover after a click.
   const pillClass = cn(
-    'inline-flex items-center gap-1 rounded-full font-semibold leading-none whitespace-nowrap select-none align-middle',
+    'inline-flex items-center gap-1 rounded-full font-medium leading-none whitespace-nowrap select-none align-middle',
     size === 'xs' ? 'px-2 py-[3px] text-[10px]' : 'px-2.5 py-1 text-xs',
     className,
   )

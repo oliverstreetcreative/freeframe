@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+- OSC 0032 (O26, osc-website#393): Inter body type, Barlow Condensed headings,
+  and the Hub's green/amber/blue/red/grey asset pills across the grid, player and filters.
+  Stored status values, approval behavior and instance branding settings are preserved.
+
 ### Fixed
 
 - Project navigation and selection action bars wrap on phones so Share, New Folder, Upload and bulk actions remain onscreen.

@@ -41,7 +41,8 @@ const config: Config = {
         },
       },
       fontFamily: {
-        sans: ['var(--font-sans)'],
+        sans: ['var(--font-sans)', 'system-ui', 'sans-serif'],
+        display: ['var(--font-display)', 'Arial Narrow', 'sans-serif'],
         mono: ['var(--font-mono)'],
       },
       fontSize: {
