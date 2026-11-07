@@ -7,11 +7,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-### Changed
-- OSC 0032 (O26, osc-website#393): Inter body type, Barlow Condensed headings,
-  and the Hub's green/amber/blue/red/grey asset pills across the grid, player and filters.
-  Stored status values, approval behavior and instance branding settings are preserved.
-
 ### Fixed
 
 - Project navigation and selection action bars wrap on phones so Share, New Folder, Upload and bulk actions remain onscreen.
@@ -27,6 +22,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Replies posted on a share link are saved.** The share review screen handed the comment panel a no-op reply handler, so a reply cleared its box and sent nothing. Folder and project links have had this since v1.0.0, and single-asset links since v1.13.0, when they moved onto the same review screen. Replies now go through the same path as top-level comments, with `parent_id` set, and appear once the thread refetches. A guest without a name yet is asked first, and the typed reply waits in its box instead of being lost. A failed reply keeps its text and says why. On a view-only link, Reply is no longer offered. (#439, #443 by @oliverstreetcreative)
 - **The project page's comment sidebar had the same dead reply box.** It now posts through `useComments().createComment` with the parent. (#439, #443 by @oliverstreetcreative)
 - **`POST /share/{token}/comment` checks a reply's parent.** The parent must be a live, non-internal comment on the asset the link resolves to. Before, an unknown `parent_id` answered 500, and a parent on another asset, a deleted parent, or an internal one was accepted. A share-link reply also now takes its parent's version, as `POST /assets/{id}/comments/{id}/replies` does. (#439, #443 by @oliverstreetcreative)
+
+### Changed
+- OSC 0032 (O26, osc-website#393): Inter body type, Barlow Condensed headings,
+  and the Hub's green/amber/blue/red/grey asset pills across the grid, player and filters.
+  Stored status values, approval behavior and instance branding settings are preserved.
 
 ## [1.15.2] - 2026-10-04
 
