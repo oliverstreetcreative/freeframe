@@ -9,6 +9,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Bulk move can no longer put a folder inside its own subfolder.** `POST /projects/{id}/bulk-move` checked the target's descendants instead of the moved folder's, so moving a parent into its child was accepted and left both folders unreachable from the project root, while lifting a nested folder up into an ancestor was refused. It now checks each moved folder's own subtree, as `PATCH /folders/{id}` does, and validates every folder before anything moves, so a refused request leaves folders and assets where they were. (OSC 0033, oliver-street-skills#1074)
+
 - Project navigation and selection action bars wrap on phones so Share, New Folder, Upload and bulk actions remain onscreen.
 
 - Share fields consistently distinguish Name (internal), Title (share-page heading), and Description without changing stored values.

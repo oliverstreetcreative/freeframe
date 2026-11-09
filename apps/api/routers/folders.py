@@ -353,6 +353,31 @@ def bulk_move(
         if target.project_id != project_id:
             raise HTTPException(status_code=400, detail="Target folder not in this project")
 
+    # Validate folders before anything moves, so a refused request moves nothing.
+    # A cycle forms when the target is the moved folder or sits in ITS subtree
+    # (OSC #1074): the target's own descendants are the wrong subtree to check.
+    folders: list[Folder] = []
+    if body.folder_ids:
+        folders = (
+            db.query(Folder)
+            .filter(
+                Folder.id.in_(body.folder_ids),
+                Folder.project_id == project_id,
+                Folder.deleted_at.is_(None),
+            )
+            .all()
+        )
+        if len(folders) != len(body.folder_ids):
+            raise HTTPException(status_code=400, detail="Some folders not found in this project")
+
+        if body.target_folder_id is not None:
+            for f in folders:
+                if f.id == body.target_folder_id or body.target_folder_id in _get_descendant_ids(db, f.id):
+                    raise HTTPException(
+                        status_code=400,
+                        detail=f"Cannot move folder '{f.name}' into itself or a subfolder",
+                    )
+
     # Move assets
     if body.asset_ids:
         assets = (
@@ -370,31 +395,8 @@ def bulk_move(
             a.folder_id = body.target_folder_id
 
     # Move folders
-    if body.folder_ids:
-        descendants = set()
-        if body.target_folder_id:
-            descendants = set(_get_descendant_ids(db, body.target_folder_id))
-            descendants.add(body.target_folder_id)
-
-        folders = (
-            db.query(Folder)
-            .filter(
-                Folder.id.in_(body.folder_ids),
-                Folder.project_id == project_id,
-                Folder.deleted_at.is_(None),
-            )
-            .all()
-        )
-        if len(folders) != len(body.folder_ids):
-            raise HTTPException(status_code=400, detail="Some folders not found in this project")
-
-        for f in folders:
-            if f.id in descendants or f.id == body.target_folder_id:
-                raise HTTPException(
-                    status_code=400,
-                    detail=f"Cannot move folder '{f.name}' into itself or a subfolder",
-                )
-            f.parent_id = body.target_folder_id
+    for f in folders:
+        f.parent_id = body.target_folder_id
 
     db.commit()
     return {"ok": True, "moved_assets": len(body.asset_ids), "moved_folders": len(body.folder_ids)}
