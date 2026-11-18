@@ -64,7 +64,9 @@ class AssetVersion(Base):
     # NULL for rows created before this was recorded, and for versions whose
     # upload has been completed or aborted -- treat NULL as "unknown", never as
     # "no upload exists".
-    upload_id: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    # OSC 0034: 1024, not 255. Cloudflare R2's multipart UploadIds are ~343 characters, so 255
+    # made /upload/initiate fail. Existing databases are widened by osc_status_ddl (not alembic).
+    upload_id: Mapped[Optional[str]] = mapped_column(String(1024), nullable=True)
     # Last time a part was signed for this upload. The reaper ages uploads by
     # this rather than by created_at, so a transfer slower than the window is not
     # aborted while it is still making progress.

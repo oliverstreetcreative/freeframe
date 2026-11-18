@@ -56,8 +56,34 @@ def main() -> None:
                 internal_label varchar(255),
                 updated_at timestamptz NOT NULL DEFAULT now()
             )"""))
+        widened = widen_upload_id(conn)
     print("osc_status_ddl: assetstatus has client_review; osc_guest_approvals, osc_version_tc, "
           "osc_version_labels, osc_share_meta ready")
+    print("osc_status_ddl: asset_versions.upload_id "
+          + (f"widened to varchar({UPLOAD_ID_LENGTH})" if widened else "unchanged (already wide enough)"))
+
+
+# OSC 0034: asset_versions.upload_id holds the S3 multipart UploadId. Upstream's migration
+# b2c4d6e8f0a1 made it varchar(255), but Cloudflare R2's UploadIds are ~343 characters, so
+# /upload/initiate failed with StringDataRightTruncation. The model says 1024; this brings an
+# existing database (or a fresh one alembic just built at 255) up to it. It only ever WIDENS:
+# nothing happens when the column is already >= 1024 (the live database was widened by hand
+# 11/18) or unbounded (if upstream later makes it text). Widening a varchar is metadata-only in
+# Postgres (no table rewrite); skipping it when unneeded also skips the ALTER's lock at every start.
+UPLOAD_ID_LENGTH = 1024
+
+
+def widen_upload_id(conn) -> bool:
+    """Widen asset_versions.upload_id to varchar(UPLOAD_ID_LENGTH) if it's narrower. True if it did."""
+    current = conn.execute(text(
+        "SELECT character_maximum_length FROM information_schema.columns "
+        "WHERE table_schema = current_schema() AND table_name = 'asset_versions' "
+        "AND column_name = 'upload_id'"
+    )).scalar()
+    if current is None or current >= UPLOAD_ID_LENGTH:  # no such column, text, or already wide
+        return False
+    conn.execute(text(f"ALTER TABLE asset_versions ALTER COLUMN upload_id TYPE varchar({UPLOAD_ID_LENGTH})"))
+    return True
 
 
 if __name__ == "__main__":
