@@ -1,5 +1,5 @@
 import type { Metadata, Viewport } from "next";
-import { DM_Sans } from "next/font/google";
+import localFont from "next/font/local";
 import { ToastProvider } from "@/components/shared/toast";
 import { ThemeInitializer } from "@/components/shared/theme-initializer";
 import { BrandingHead } from "@/components/shared/branding-head";
@@ -9,11 +9,20 @@ import { accentVars } from "@/lib/accent";
 import { withBasePath } from "@/lib/base-path";
 import "./globals.css";
 
-const dmSans = DM_Sans({
-  subsets: ["latin"],
+const inter = localFont({
+  src: [{ path: "./fonts/inter-var-latin.woff2", weight: "100 900", style: "normal" }],
   display: "swap",
   variable: "--font-sans",
-  weight: ["400", "500", "600", "700"],
+  preload: true,
+});
+
+const barlowCondensed = localFont({
+  src: [
+    { path: "./fonts/barlowcondensed-normal-600-latin.woff2", weight: "600", style: "normal" },
+    { path: "./fonts/barlowcondensed-normal-700-latin.woff2", weight: "700", style: "normal" },
+  ],
+  display: "swap",
+  variable: "--font-display",
   preload: true,
 });
 
@@ -81,7 +90,7 @@ export default async function RootLayout({
         <link rel="shortcut icon" href={favicon} data-ff-branding="" />
         <link rel="apple-touch-icon" href={appleIcon} data-ff-branding="" />
       </head>
-      <body className={`${dmSans.variable} font-sans antialiased`}>
+      <body className={`${inter.variable} ${barlowCondensed.variable} font-sans antialiased`}>
         <ThemeInitializer />
         <BrandingProvider initial={branding}>
           {/* Renders nothing; it keeps the live document in step with branding
